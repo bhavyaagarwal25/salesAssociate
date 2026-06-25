@@ -1,41 +1,40 @@
 import SwiftUI
+
 //Issue Module Main Screen
 enum IssueWorkspaceMode: String, CaseIterable, Identifiable, Equatable {
-    case returnExchange = "Return / Exchange"
-    case repair = "Repair"
-    case services = "Services"
-    case history = "History"
+    case issue = "Issue"
+    case pastRequests = "Past Requests"
 
     var id: String { rawValue }
 }
+
 // in this there is option that is avaiable in on the screen
 struct IssueContent: View {
     let dashboard: IssueDashboard
     let products: [SalesProduct]
 
-    @State private var selectedMode: IssueWorkspaceMode = .returnExchange
-    @State private var selectedReturnExchangeType: String
-    @State private var returnReason = ""
-    @State private var repairIssue = ""
-    @State private var repairCharge = "Rs. 2,500"
-    @State private var repairStatus: String
-    @State private var selectedServiceType: String
-    @State private var serviceIssue = ""
+    @State private var selectedMode: IssueWorkspaceMode = .issue
+    @State private var selectedIssueTypeID: String
+    @State private var issueReason = ""
+    @State private var selectedRepairDiagnosis: String
+    @State private var selectedRepairServicePrice: String
+    @State private var selectedRepairWarranty: String
+    @State private var sparePartsCost = "Rs. 0"
+    @State private var labourCharge = "Included"
 
     init(dashboard: IssueDashboard, products: [SalesProduct]) {
         self.dashboard = dashboard
         self.products = products
-        _selectedReturnExchangeType = State(initialValue: dashboard.returnExchangeTypes.first ?? "Exchange")
-        _repairStatus = State(initialValue: dashboard.repairStatuses.first ?? "Assessment pending")
-        _selectedServiceType = State(initialValue: dashboard.serviceTypes.first ?? "Cleaning")
+        _selectedIssueTypeID = State(initialValue: dashboard.issueTypes.first?.id ?? "missing")
+        _selectedRepairDiagnosis = State(initialValue: dashboard.repairDiagnosisTypes.first ?? "Inspection pending")
+        _selectedRepairServicePrice = State(initialValue: dashboard.repairServicePrices.first ?? "Standard price pending")
+        _selectedRepairWarranty = State(initialValue: dashboard.repairWarrantyOptions.first ?? "Warranty check pending")
     }
 
-    private var repairProduct: SalesProduct? {
-        products.first(where: { $0.id == "HB-224" }) ?? products.first
-    }
-
-    private var serviceProduct: SalesProduct? {
-        products.first(where: { $0.id == "JW-311" }) ?? products.first
+    private var selectedIssueType: IssueRequestType {
+        dashboard.issueTypes.first(where: { $0.id == selectedIssueTypeID })
+        ?? dashboard.issueTypes.first
+        ?? IssueRequestType(id: "issue", title: "Issue", icon: "exclamationmark.circle", description: "Send issue details to Store Manager.")
     }
 
     var body: some View {
@@ -46,30 +45,25 @@ struct IssueContent: View {
                 Card {
                     VStack(alignment: .leading, spacing: 18) {
                         IssueModePicker(selectedMode: $selectedMode)
+
 // here are the cases that it direct on the tab that we select
                         switch selectedMode {
-                        case .returnExchange:
-                            ReturnExchangePane(
-                                types: dashboard.returnExchangeTypes,
-                                selectedType: $selectedReturnExchangeType,
-                                reason: $returnReason
+                        case .issue:
+                            IssueRequestPane(
+                                issueTypes: dashboard.issueTypes,
+                                selectedIssueType: selectedIssueType,
+                                selectedIssueTypeID: $selectedIssueTypeID,
+                                reason: $issueReason,
+                                repairDiagnosisOptions: dashboard.repairDiagnosisTypes,
+                                repairServicePriceOptions: dashboard.repairServicePrices,
+                                repairWarrantyOptions: dashboard.repairWarrantyOptions,
+                                selectedRepairDiagnosis: $selectedRepairDiagnosis,
+                                selectedRepairServicePrice: $selectedRepairServicePrice,
+                                selectedRepairWarranty: $selectedRepairWarranty,
+                                sparePartsCost: $sparePartsCost,
+                                labourCharge: $labourCharge
                             )
-                        case .repair:
-                            RepairPane(
-                                product: repairProduct,
-                                statusOptions: dashboard.repairStatuses,
-                                issue: $repairIssue,
-                                charge: $repairCharge,
-                                status: $repairStatus
-                            )
-                        case .services:
-                            ServicesPane(
-                                product: serviceProduct,
-                                serviceTypes: dashboard.serviceTypes,
-                                selectedServiceType: $selectedServiceType,
-                                serviceIssue: $serviceIssue
-                            )
-                        case .history:
+                        case .pastRequests:
                             IssueHistoryPane(items: dashboard.historyItems)
                         }
                     }
@@ -127,143 +121,232 @@ private struct IssueModePicker: View {
         )
     }
 }
+
 // this is for returnexchanghe part
-private struct ReturnExchangePane: View {
-    let types: [String]
-    @Binding var selectedType: String
+private struct IssueRequestPane: View {
+    let issueTypes: [IssueRequestType]
+    let selectedIssueType: IssueRequestType
+    @Binding var selectedIssueTypeID: String
     @Binding var reason: String
+    let repairDiagnosisOptions: [String]
+    let repairServicePriceOptions: [String]
+    let repairWarrantyOptions: [String]
+    @Binding var selectedRepairDiagnosis: String
+    @Binding var selectedRepairServicePrice: String
+    @Binding var selectedRepairWarranty: String
+    @Binding var sparePartsCost: String
+    @Binding var labourCharge: String
+
+    private var isRepairSelected: Bool {
+        selectedIssueType.id == "repair"
+    }
+
+    private var reasonPlaceholder: String {
+        switch selectedIssueType.id {
+        case "missing":
+            return "Write what is missing, when it was noticed, and what proof is attached..."
+        case "exchange":
+            return "Write the exchange reason, client context, and any policy exception required..."
+        case "repair":
+            return "Write the repair concern, visible damage, client statement, and urgency..."
+        default:
+            return "Write the service issue, client request, and any visible proof..."
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             IssuePaneTitle(
-                title: "Return / Exchange Request",
-                subtitle: "Capture details and send exception request to Store Manager",
+                title: "Issue Request",
+                subtitle: "Send missing, exchange, repair, or service issue details to Store Manager",
                 badge: "SM route"
             )
 
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 14) {
-                    IssueDropdownMenu(
-                        title: "Type",
-                        options: types,
-                        selection: $selectedType
-                    )
+            IssueRequestTypeDropdown(
+                issueTypes: issueTypes,
+                selectedIssueTypeID: $selectedIssueTypeID,
+                selectedIssueType: selectedIssueType
+            )
 
-                    IssueTextArea(
-                        title: "Reason",
-                        placeholder: "Write the reason for return, exchange, or cancellation review...",
-                        text: $reason,
-                        minHeight: 184
-                    )
-                }
-                .frame(maxWidth: .infinity)
+            HStack(alignment: .top, spacing: 14) {
+                IssueEvidenceButton(title: "Photo", subtitle: "Add product or issue proof", icon: "camera")
+                IssueEvidenceButton(title: "Receipt", subtitle: "Attach purchase or service receipt", icon: "doc.text")
+            }
 
-                VStack(spacing: 12) {
-                    IssueEvidenceButton(title: "Photo", subtitle: "Add product proof", icon: "camera")
-                    IssueEvidenceButton(title: "Receipt", subtitle: "Attach purchase receipt", icon: "doc.text")
-                }
-                .frame(width: 270)
+            IssueTextArea(
+                title: "Reason",
+                placeholder: reasonPlaceholder,
+                text: $reason,
+                minHeight: isRepairSelected ? 128 : 188
+            )
+
+            if isRepairSelected {
+                RepairChargeDetailsSection(
+                    diagnosisOptions: repairDiagnosisOptions,
+                    servicePriceOptions: repairServicePriceOptions,
+                    warrantyOptions: repairWarrantyOptions,
+                    selectedDiagnosis: $selectedRepairDiagnosis,
+                    selectedServicePrice: $selectedRepairServicePrice,
+                    selectedWarranty: $selectedRepairWarranty,
+                    sparePartsCost: $sparePartsCost,
+                    labourCharge: $labourCharge
+                )
             }
 
             IssueGuidanceBanner(
-                icon: "person.badge.shield.checkmark",
-                title: "\(selectedType) request ready for Store Manager",
-                subtitle: "Sales Associate records the client reason and evidence. Store Manager approves or rejects the request."
+                icon: selectedIssueType.icon,
+                title: "\(selectedIssueType.title) request ready",
+                subtitle: "Sales Associate captures evidence and reason. Store Manager reviews approval, rejection, or next action."
             )
 
-            IssuePrimaryButton(title: "Send Request to Store Manager", icon: "paperplane")
+            IssuePrimaryButton(title: "Submit to SM", icon: "paperplane")
         }
     }
 }
-// this is for repair mode
-private struct RepairPane: View {
-    let product: SalesProduct?
-    let statusOptions: [String]
-    @Binding var issue: String
-    @Binding var charge: String
-    @Binding var status: String
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            IssuePaneTitle(
-                title: "Repair Request",
-                subtitle: "Record repair issue, estimated charge, and SA status before receipt generation",
-                badge: "Receipt"
-            )
-
-            HStack(alignment: .top, spacing: 16) {
-                IssueProductSummaryCard(product: product, title: "Product")
-                    .frame(width: 292)
-
-                VStack(alignment: .leading, spacing: 14) {
-                    IssueTextArea(
-                        title: "Issue",
-                        placeholder: "Describe repair issue, visible damage, or client concern...",
-                        text: $issue,
-                        minHeight: 150
-                    )
-
-                    HStack(spacing: 12) {
-                        IssueTextField(title: "Charge", placeholder: "Estimated charge", text: $charge)
-                        IssueDropdownMenu(title: "Status by Sales Associate", options: statusOptions, selection: $status)
-                    }
-
-                    IssueGuidanceBanner(
-                        icon: "wrench.adjustable",
-                        title: "Repair note will be attached to the receipt",
-                        subtitle: "Use this after Store Manager confirms whether the repair can be accepted."
-                    )
-
-                    IssuePrimaryButton(title: "Generate Receipt", icon: "receipt")
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-    }
-}
 // this is for service issue
-private struct ServicesPane: View {
-    let product: SalesProduct?
-    let serviceTypes: [String]
-    @Binding var selectedServiceType: String
-    @Binding var serviceIssue: String
+private struct IssueRequestTypeDropdown: View {
+    let issueTypes: [IssueRequestType]
+    @Binding var selectedIssueTypeID: String
+    let selectedIssueType: IssueRequestType
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            IssuePaneTitle(
-                title: "Service Request",
-                subtitle: "Capture service evidence and send request to Store Manager",
-                badge: "SM route"
+        Menu {
+            ForEach(issueTypes) { issueType in
+                Button {
+                    selectedIssueTypeID = issueType.id
+                } label: {
+                    Label(issueType.title, systemImage: issueType.icon)
+                }
+            }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: selectedIssueType.icon)
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 48, height: 48)
+                    .background(Theme.selected, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("ISSUE TYPE")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.muted)
+                    Text(selectedIssueType.title)
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(Theme.ink)
+                    Text(selectedIssueType.description)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.down")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.72), in: Circle())
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 84)
+            .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// this is for repair mode
+private struct RepairChargeDetailsSection: View {
+    let diagnosisOptions: [String]
+    let servicePriceOptions: [String]
+    let warrantyOptions: [String]
+    @Binding var selectedDiagnosis: String
+    @Binding var selectedServicePrice: String
+    @Binding var selectedWarranty: String
+    @Binding var sparePartsCost: String
+    @Binding var labourCharge: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Repair Assessment")
+                        .font(.headline.weight(.black))
+                    Text("Used only when repair is selected")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+            }
+
+            HStack(spacing: 12) {
+                IssueDropdownMenu(
+                    title: "Inspection / Diagnosis",
+                    options: diagnosisOptions,
+                    selection: $selectedDiagnosis
+                )
+                IssueDropdownMenu(
+                    title: "Standard Service Price",
+                    options: servicePriceOptions,
+                    selection: $selectedServicePrice
+                )
+            }
+
+            HStack(spacing: 12) {
+                IssueTextField(title: "Spare Parts Cost", placeholder: "Add parts cost", text: $sparePartsCost)
+                IssueTextField(title: "Labour Charges", placeholder: "Add labour charge", text: $labourCharge)
+            }
+
+            IssueDropdownMenu(
+                title: "Warranty Check",
+                options: warrantyOptions,
+                selection: $selectedWarranty
             )
 
-            HStack(alignment: .top, spacing: 16) {
-                VStack(spacing: 14) {
-                    IssueProductSummaryCard(product: product, title: "Product")
-                    IssueEvidenceButton(title: "Receipt", subtitle: "Attach service receipt", icon: "doc.text")
-                }
-                .frame(width: 292)
-
-                VStack(alignment: .leading, spacing: 14) {
-                    IssueDropdownMenu(
-                        title: "Type of Service Issue",
-                        options: serviceTypes,
-                        selection: $selectedServiceType
-                    )
-
-                    IssueTextArea(
-                        title: "Service Issue",
-                        placeholder: "Write service issue, client request, and any visible proof...",
-                        text: $serviceIssue,
-                        minHeight: 214
-                    )
-
-                    IssuePrimaryButton(title: "Submit to Store Manager", icon: "paperplane")
-                }
-                .frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 8) {
+                RepairRuleRow(text: "Manufacturing defect inside warranty can be free after SM or service-center approval.")
+                RepairRuleRow(text: "Accidental damage, broken glass, strap replacement, and model-specific spare parts are chargeable.")
+                RepairRuleRow(text: "Final repair amount depends on service price list, spare part price, and labour charges.")
             }
+            .padding(14)
+            .background(.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .padding(14)
+        .background(Theme.selected.opacity(0.45), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct RepairRuleRow: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.seal")
+                .font(.caption.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .padding(.top, 2)
+            Text(text)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
+
 // this is for issue history 
 private struct IssueHistoryPane: View {
     let items: [IssueHistoryItem]
@@ -271,7 +354,7 @@ private struct IssueHistoryPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             IssuePaneTitle(
-                title: "Request History",
+                title: "Past Requests",
                 subtitle: "Past requests sent to Store Manager with approval or rejection status",
                 badge: "\(items.count) updates"
             )
@@ -328,7 +411,7 @@ private struct IssueDropdownMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(title.uppercased())
                         .font(.caption.weight(.black))
@@ -337,7 +420,8 @@ private struct IssueDropdownMenu: View {
                     Text(selection)
                         .font(.headline.weight(.black))
                         .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -347,7 +431,8 @@ private struct IssueDropdownMenu: View {
                     .foregroundStyle(Theme.gold)
             }
             .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
             .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)

@@ -1,13 +1,15 @@
 import SwiftUI
+
 // stock screen
 enum StockWorkspaceMode: String, CaseIterable, Identifiable {
     case stock = "Stock"
-    case missingIssue = "Missing Issue"
+    case issue = "Issue"
     case scanStock = "Scan Stock"
     case smReview = "SM Review"
 
     var id: String { rawValue }
 }
+
 // there are products listed in the stock
 struct StockContent: View {
     let dashboard: StockDashboard
@@ -50,7 +52,7 @@ struct StockContent: View {
                                 products: filteredProducts,
                                 query: $stockQuery
                             )
-                        case .missingIssue:
+                        case .issue:
                             StockReceivingIssuePane(
                                 issueTypes: dashboard.issueTypes,
                                 selectedIssueTypeID: $selectedIssueTypeID,
@@ -75,6 +77,7 @@ struct StockContent: View {
         .animation(.snappy(duration: 0.24), value: selectedMode)
     }
 }
+
 // stock header
 private struct StockHeader: View {
     var body: some View {
@@ -88,6 +91,7 @@ private struct StockHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
 // from where we select the mode in stock
 private struct StockModePicker: View {
     @Binding var selectedMode: StockWorkspaceMode
@@ -120,6 +124,7 @@ private struct StockModePicker: View {
         )
     }
 }
+
 // form here we can look into the stock overview
 private struct StockOverviewPane: View {
     let metrics: [StockMetric]
@@ -281,9 +286,9 @@ private struct StockReceivingIssuePane: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Inventory Receiving Issue")
+                    Text("Stock Issue")
                         .font(.title2.weight(.black))
-                    Text("For short quantity, damaged arrival, or item mismatch from inventory handoff")
+                    Text("Report missing, damaged, or mismatched received inventory to Store Manager")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.muted)
                 }
@@ -298,41 +303,52 @@ private struct StockReceivingIssuePane: View {
                     .background(Theme.selected, in: Capsule())
             }
 
-            StockIssueTypePicker(
+            StockIssueDropdown(
                 issueTypes: issueTypes,
-                selectedIssueTypeID: $selectedIssueTypeID
+                selectedIssueTypeID: $selectedIssueTypeID,
+                selectedIssueType: selectedIssueType
             )
 
             HStack(alignment: .top, spacing: 14) {
-                StockPhotoUploadTile()
+                StockEvidenceUploadTile(
+                    title: "Photo",
+                    subtitle: "Add received item, box, tag, or damage proof",
+                    icon: "camera"
+                )
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Notes")
-                        .font(.headline.weight(.black))
-                    Text(selectedIssueType.description)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.muted)
-                    TextEditor(text: $notes)
-                        .scrollContentBackground(.hidden)
-                        .padding(10)
-                        .frame(minHeight: 164)
-                        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
-                        )
-                        .overlay(alignment: .topLeading) {
-                            if notes.isEmpty {
-                                Text("Add what was received, what was expected, and any visible issue...")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Theme.muted.opacity(0.66))
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 18)
-                            }
-                        }
-                }
-                .frame(maxWidth: .infinity)
+                StockEvidenceUploadTile(
+                    title: "Receipt",
+                    subtitle: "Attach receiving slip or handoff receipt",
+                    icon: "doc.text"
+                )
             }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Notes")
+                    .font(.headline.weight(.black))
+                Text(selectedIssueType.description)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+                TextEditor(text: $notes)
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 150)
+                    .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                    )
+                    .overlay(alignment: .topLeading) {
+                        if notes.isEmpty {
+                            Text("Add what was received, what was expected, and any visible issue...")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.muted.opacity(0.66))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 18)
+                        }
+                    }
+            }
+            .frame(maxWidth: .infinity)
 
             HStack(spacing: 12) {
                 Image(systemName: selectedIssueType.icon)
@@ -355,7 +371,7 @@ private struct StockReceivingIssuePane: View {
 
             Button {
             } label: {
-                Label("Submit to Store Manager", systemImage: "paperplane")
+                Label("Submit to SM", systemImage: "paperplane")
                     .font(.headline.weight(.black))
                     .frame(maxWidth: .infinity, minHeight: 56)
                     .foregroundStyle(.white)
@@ -366,49 +382,83 @@ private struct StockReceivingIssuePane: View {
     }
 }
 
-private struct StockIssueTypePicker: View {
+private struct StockIssueDropdown: View {
     let issueTypes: [StockIssueType]
     @Binding var selectedIssueTypeID: String
+    let selectedIssueType: StockIssueType
 
     var body: some View {
-        HStack(spacing: 10) {
+        Menu {
             ForEach(issueTypes) { issueType in
                 Button {
                     selectedIssueTypeID = issueType.id
                 } label: {
-                    Text(issueType.title)
-                        .font(.headline.weight(.black))
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .foregroundStyle(selectedIssueTypeID == issueType.id ? .white : Theme.ink)
-                        .background(
-                            selectedIssueTypeID == issueType.id ? AnyShapeStyle(Theme.goldGradient) : AnyShapeStyle(.white.opacity(0.62)),
-                            in: Capsule()
-                        )
+                    Label(issueType.title, systemImage: issueType.icon)
                 }
-                .buttonStyle(.plain)
             }
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: selectedIssueType.icon)
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 48, height: 48)
+                    .background(Theme.selected, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("ISSUE TYPE")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.muted)
+                    Text(selectedIssueType.title)
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(Theme.ink)
+                    Text(selectedIssueType.description)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.down")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.72), in: Circle())
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 84)
+            .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+            )
         }
+        .buttonStyle(.plain)
     }
 }
 
-private struct StockPhotoUploadTile: View {
+private struct StockEvidenceUploadTile: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "camera")
+            Image(systemName: icon)
                 .font(.system(size: 42, weight: .black))
                 .foregroundStyle(Theme.gold)
                 .frame(width: 78, height: 78)
                 .background(Theme.selected, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
 
-            Text("Add Photo")
+            Text(title)
                 .font(.title3.weight(.black))
-            Text("Attach received item, box, tag, or damage proof")
+            Text(subtitle)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.muted)
                 .multilineTextAlignment(.center)
         }
-        .frame(width: 250)
-        .frame(minHeight: 232)
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 168)
         .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
