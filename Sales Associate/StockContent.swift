@@ -1,5 +1,5 @@
 import SwiftUI
-
+// stock screen
 enum StockWorkspaceMode: String, CaseIterable, Identifiable {
     case stock = "Stock"
     case missingIssue = "Missing Issue"
@@ -8,7 +8,7 @@ enum StockWorkspaceMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 }
-
+// there are products listed in the stock
 struct StockContent: View {
     let dashboard: StockDashboard
     let products: [SalesProduct]
@@ -75,7 +75,7 @@ struct StockContent: View {
         .animation(.snappy(duration: 0.24), value: selectedMode)
     }
 }
-
+// stock header
 private struct StockHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -88,7 +88,7 @@ private struct StockHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-
+// from where we select the mode in stock
 private struct StockModePicker: View {
     @Binding var selectedMode: StockWorkspaceMode
 
@@ -120,7 +120,7 @@ private struct StockModePicker: View {
         )
     }
 }
-
+// form here we can look into the stock overview
 private struct StockOverviewPane: View {
     let metrics: [StockMetric]
     let products: [SalesProduct]
