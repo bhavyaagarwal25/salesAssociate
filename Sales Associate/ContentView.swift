@@ -10,7 +10,7 @@ struct ContentView: View {
     private let products = SalesProduct.sampleProducts
     private let stockDashboard = StockDashboard.sample
     private let issueDashboard = IssueDashboard.sample
-
+//Dashboard Navigation Controller
     var body: some View {
         TodayDashboardView(
             dashboard: dashboard,
@@ -120,7 +120,7 @@ enum SalesAssociateTab: String, CaseIterable, Identifiable {
         }
     }
 }
-
+//Dashboard content view
 private struct DashboardContent: View {
     let dashboard: SalesAssociateDashboard
 
@@ -149,7 +149,7 @@ private struct DashboardContent: View {
         .scrollIndicators(.hidden)
     }
 }
-
+// Header Bar view
 private struct HeaderBar: View {
     var body: some View {
         HStack(alignment: .center) {
@@ -183,7 +183,7 @@ private struct HeaderBar: View {
         }
     }
 }
-
+//Sidebar Navigation Menu
 private struct SidebarView: View {
     let associate: AssociateProfile
 
@@ -310,7 +310,7 @@ private struct TopNavigationBar: View {
         }
     }
 }
-
+//Top Navigation view
 private struct TopNavigationItem: View {
     let tab: SalesAssociateTab
     let isSelected: Bool
@@ -364,7 +364,7 @@ private struct NavigationModeButton: View {
         .accessibilityLabel(title.isEmpty ? "Show Sidebar" : title)
     }
 }
-
+// SideBar items
 private struct SidebarItem: View {
     let tab: SalesAssociateTab
     let isSelected: Bool
@@ -396,7 +396,7 @@ private struct SidebarItem: View {
         .buttonStyle(.plain)
     }
 }
-
+// client content
 private struct ClientelingContent: View {
     let availableClients: [ClientProfile]
 
@@ -442,7 +442,7 @@ private struct ClientelingContent: View {
         }
         .scrollIndicators(.hidden)
     }
-
+//search the existing client
     private func searchExistingClient() {
         let searchTerm = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -548,7 +548,7 @@ private struct ClientSearchPanel: View {
         }
     }
 }
-
+// if there is no profile avialable
 private struct NoProfileFoundCard: View {
     let searchTerm: String
 

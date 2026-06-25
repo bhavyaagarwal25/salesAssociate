@@ -1,5 +1,5 @@
 import SwiftUI
-
+//Issue Module Main Screen
 enum IssueWorkspaceMode: String, CaseIterable, Identifiable, Equatable {
     case returnExchange = "Return / Exchange"
     case repair = "Repair"
@@ -8,7 +8,7 @@ enum IssueWorkspaceMode: String, CaseIterable, Identifiable, Equatable {
 
     var id: String { rawValue }
 }
-
+// in this there is option that is avaiable in on the screen
 struct IssueContent: View {
     let dashboard: IssueDashboard
     let products: [SalesProduct]
@@ -46,7 +46,7 @@ struct IssueContent: View {
                 Card {
                     VStack(alignment: .leading, spacing: 18) {
                         IssueModePicker(selectedMode: $selectedMode)
-
+// here are the cases that it direct on the tab that we select
                         switch selectedMode {
                         case .returnExchange:
                             ReturnExchangePane(
@@ -127,7 +127,7 @@ private struct IssueModePicker: View {
         )
     }
 }
-
+// this is for returnexchanghe part
 private struct ReturnExchangePane: View {
     let types: [String]
     @Binding var selectedType: String
@@ -175,7 +175,7 @@ private struct ReturnExchangePane: View {
         }
     }
 }
-
+// this is for repair mode
 private struct RepairPane: View {
     let product: SalesProduct?
     let statusOptions: [String]
@@ -221,7 +221,7 @@ private struct RepairPane: View {
         }
     }
 }
-
+// this is for service issue
 private struct ServicesPane: View {
     let product: SalesProduct?
     let serviceTypes: [String]
@@ -264,7 +264,7 @@ private struct ServicesPane: View {
         }
     }
 }
-
+// this is for issue history 
 private struct IssueHistoryPane: View {
     let items: [IssueHistoryItem]
 
