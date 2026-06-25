@@ -2,8 +2,13 @@ extension SalesAssociateDashboard {
     static let sample = SalesAssociateDashboard(
         associate: AssociateProfile(
             initials: "SA",
+            name: "Gauri Sharma",
             role: "Sales Associate",
-            boutique: "South Mumbai"
+            boutique: "South Mumbai",
+            email: "gauri.kashish@rsms.in",
+            phone: "+91 98765 43210",
+            employeeID: "SA-2048",
+            shift: "Morning shift"
         ),
         monthlyGoal: SalesGoal(
             title: "Monthly Sales Goal",
@@ -93,6 +98,30 @@ extension StockDashboard {
 
 extension IssueDashboard {
     static let sample = IssueDashboard(
+        issueTypes: [
+            IssueRequestType(id: "missing", title: "Missing", icon: "exclamationmark.triangle", description: "Report missing item details or missing proof to Store Manager."),
+            IssueRequestType(id: "exchange", title: "Exchange", icon: "arrow.left.arrow.right", description: "Request Store Manager review for exchange eligibility."),
+            IssueRequestType(id: "repair", title: "Repair", icon: "wrench.adjustable", description: "Capture diagnosis, warranty, parts, labour, and charge basis."),
+            IssueRequestType(id: "service", title: "Service Issue", icon: "sparkles", description: "Raise service support such as cleaning, authentication, warranty, or adjustment.")
+        ],
+        repairDiagnosisTypes: [
+            "Battery issue",
+            "Glass replacement",
+            "Movement issue",
+            "Strap replacement",
+            "Complete servicing"
+        ],
+        repairServicePrices: [
+            "Battery replacement - Fixed price",
+            "Strap replacement - Model based",
+            "Glass replacement - Watch model based",
+            "Complete servicing - Category fixed"
+        ],
+        repairWarrantyOptions: [
+            "In warranty - manufacturing defect",
+            "Accidental damage - chargeable",
+            "Warranty expired - chargeable"
+        ],
         returnExchangeTypes: ["Return", "Exchange", "Cancellation"],
         serviceTypes: ["Cleaning", "Authentication", "Warranty", "Resize / Adjustment"],
         repairStatuses: ["Assessment pending", "Receipt generated", "Client informed", "SM review needed"],

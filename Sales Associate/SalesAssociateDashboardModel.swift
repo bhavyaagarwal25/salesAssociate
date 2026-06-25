@@ -11,8 +11,13 @@ struct SalesAssociateDashboard {
 
 struct AssociateProfile {
     let initials: String
+    let name: String
     let role: String
     let boutique: String
+    let email: String
+    let phone: String
+    let employeeID: String
+    let shift: String
 }
 
 struct SalesGoal {
@@ -68,7 +73,7 @@ struct DailySales: Identifiable {
     let isBest: Bool
 }
 
-struct ClientProfile: Identifiable, Equatable {
+struct ClientProfile: Identifiable, Equatable, Codable {
     let id: String
     let phone: String
     let initials: String
@@ -94,17 +99,23 @@ struct ClientProfile: Identifiable, Equatable {
     }
 }
 
-struct ClientAttribute: Identifiable, Equatable {
-    let id = UUID()
+struct ClientAttribute: Identifiable, Equatable, Codable {
     let title: String
     let value: String
+
+    var id: String {
+        "\(title)-\(value)"
+    }
 }
 
-struct ClientTask: Identifiable, Equatable {
-    let id = UUID()
+struct ClientTask: Identifiable, Equatable, Codable {
     let icon: String
     let title: String
     let subtitle: String
+
+    var id: String {
+        "\(icon)-\(title)-\(subtitle)"
+    }
 }
 
 struct ProductCategory: Identifiable, Equatable {
@@ -181,10 +192,21 @@ struct StoreManagerReview: Identifiable {
 }
 
 struct IssueDashboard {
+    let issueTypes: [IssueRequestType]
+    let repairDiagnosisTypes: [String]
+    let repairServicePrices: [String]
+    let repairWarrantyOptions: [String]
     let returnExchangeTypes: [String]
     let serviceTypes: [String]
     let repairStatuses: [String]
     let historyItems: [IssueHistoryItem]
+}
+
+struct IssueRequestType: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let icon: String
+    let description: String
 }
 
 struct IssueHistoryItem: Identifiable {

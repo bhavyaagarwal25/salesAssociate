@@ -3,24 +3,29 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedTab: SalesAssociateTab = .today
     @State private var navigationMode: SalesNavigationMode = .sidebar
+    @State private var recentlyViewedClients: [ClientProfile] = []
+    @State private var clientProfiles = ClientProfileJSONStore.loadProfiles()
+    @State private var sellingSession = SellingSessionState()
 
     private let dashboard = SalesAssociateDashboard.sample
-    private let clientProfiles = ClientProfile.sampleProfiles
     private let categories = ProductCategory.sampleCategories
     private let products = SalesProduct.sampleProducts
     private let stockDashboard = StockDashboard.sample
     private let issueDashboard = IssueDashboard.sample
+
 //Dashboard Navigation Controller
     var body: some View {
         TodayDashboardView(
             dashboard: dashboard,
-            clientProfiles: clientProfiles,
+            clientProfiles: $clientProfiles,
             categories: categories,
             products: products,
             stockDashboard: stockDashboard,
             issueDashboard: issueDashboard,
             selectedTab: $selectedTab,
-            navigationMode: $navigationMode
+            navigationMode: $navigationMode,
+            recentlyViewedClients: $recentlyViewedClients,
+            sellingSession: $sellingSession
         )
     }
 }
@@ -32,7 +37,7 @@ enum SalesNavigationMode: Equatable {
 
 struct TodayDashboardView: View {
     let dashboard: SalesAssociateDashboard
-    let clientProfiles: [ClientProfile]
+    @Binding var clientProfiles: [ClientProfile]
     let categories: [ProductCategory]
     let products: [SalesProduct]
     let stockDashboard: StockDashboard
@@ -40,6 +45,9 @@ struct TodayDashboardView: View {
 
     @Binding var selectedTab: SalesAssociateTab
     @Binding var navigationMode: SalesNavigationMode
+    @Binding var recentlyViewedClients: [ClientProfile]
+    @Binding var sellingSession: SellingSessionState
+    @State private var isAssociateProfilePresented = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -50,7 +58,10 @@ struct TodayDashboardView: View {
                         SidebarView(
                             associate: dashboard.associate,
                             selectedTab: $selectedTab,
-                            navigationMode: $navigationMode
+                            navigationMode: $navigationMode,
+                            onProfileTap: {
+                                isAssociateProfilePresented = true
+                            }
                         )
                         .frame(width: sidebarWidth(for: proxy.size.width))
 
@@ -60,7 +71,6 @@ struct TodayDashboardView: View {
                 case .top:
                     VStack(spacing: 0) {
                         TopNavigationBar(
-                            associate: dashboard.associate,
                             selectedTab: $selectedTab,
                             navigationMode: $navigationMode
                         )
@@ -72,6 +82,9 @@ struct TodayDashboardView: View {
             }
             .background(Theme.background)
             .animation(.snappy(duration: 0.26), value: navigationMode)
+            .sheet(isPresented: $isAssociateProfilePresented) {
+                AssociateProfileSheet(associate: dashboard.associate)
+            }
         }
     }
 
@@ -79,11 +92,25 @@ struct TodayDashboardView: View {
     private var content: some View {
         switch selectedTab {
         case .today:
-            DashboardContent(dashboard: dashboard)
+            DashboardContent(
+                dashboard: dashboard,
+                onStartClient: startGuestSelling
+            )
         case .client:
-            ClientelingContent(availableClients: clientProfiles)
+            ClientelingContent(
+                availableClients: clientProfiles,
+                onStartGuestClient: startGuestSelling,
+                onBuildCuratedCart: startClientSelling,
+                recentlyViewedClients: $recentlyViewedClients
+            )
         case .sell:
-            SellContent(categories: categories, products: products)
+            SellContent(
+                categories: categories,
+                products: products,
+                session: $sellingSession,
+                onDiscardClient: discardSellingSession,
+                onCreateProfile: saveCreatedProfile
+            )
         case .stock:
             StockContent(dashboard: stockDashboard, products: products)
         case .issue:
@@ -94,11 +121,34 @@ struct TodayDashboardView: View {
     private func sidebarWidth(for width: CGFloat) -> CGFloat {
         width > 900 ? 210 : 150
     }
+
+    private func startGuestSelling() {
+        sellingSession.startNewGuest()
+        selectedTab = .sell
+    }
+
+    private func startClientSelling(_ client: ClientProfile) {
+        sellingSession.startForClient(client)
+        selectedTab = .sell
+    }
+
+    private func discardSellingSession() {
+        sellingSession.discard()
+        selectedTab = .today
+    }
+
+    private func saveCreatedProfile(_ profile: ClientProfile) {
+        clientProfiles.removeAll { $0.id == profile.id }
+        clientProfiles.insert(profile, at: 0)
+        ClientProfileJSONStore.saveProfiles(clientProfiles)
+        recentlyViewedClients.removeAll { $0.id == profile.id }
+        recentlyViewedClients.insert(profile, at: 0)
+    }
 }
 
 enum SalesAssociateTab: String, CaseIterable, Identifiable {
     case today = "Today"
-    case client = "Client"
+    case client = "Clienteling"
     case sell = "Sell"
     case stock = "Stock"
     case issue = "Issue"
@@ -120,9 +170,11 @@ enum SalesAssociateTab: String, CaseIterable, Identifiable {
         }
     }
 }
+
 //Dashboard content view
 private struct DashboardContent: View {
     let dashboard: SalesAssociateDashboard
+    let onStartClient: () -> Void
 
     var body: some View {
         ScrollView {
@@ -138,7 +190,11 @@ private struct DashboardContent: View {
 
                     VStack(spacing: 18) {
                         PriorityQueueCard(items: dashboard.priorityItems)
-                        QuickActionsCard(actions: dashboard.quickActions, metrics: dashboard.metrics)
+                        QuickActionsCard(
+                            actions: dashboard.quickActions,
+                            metrics: dashboard.metrics,
+                            onStartClient: onStartClient
+                        )
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -149,6 +205,7 @@ private struct DashboardContent: View {
         .scrollIndicators(.hidden)
     }
 }
+
 // Header Bar view
 private struct HeaderBar: View {
     var body: some View {
@@ -163,53 +220,29 @@ private struct HeaderBar: View {
 
             Spacer()
 
-            HStack(spacing: 12) {
-                Label("Search", systemImage: "magnifyingglass")
-                    .font(.headline.weight(.semibold))
-                    .padding(.horizontal, 22)
-                    .frame(height: 54)
-                    .background(.white.opacity(0.72), in: Capsule())
-
-                Button {
-                } label: {
-                    Image(systemName: "bell")
-                        .font(.title3.weight(.semibold))
-                        .frame(width: 54, height: 54)
-                        .background(.white.opacity(0.76), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.ink)
+            Button {
+            } label: {
+                Image(systemName: "bell")
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 54, height: 54)
+                    .background(.white.opacity(0.76), in: Circle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.ink)
         }
     }
 }
+
 //Sidebar Navigation Menu
 private struct SidebarView: View {
     let associate: AssociateProfile
 
     @Binding var selectedTab: SalesAssociateTab
     @Binding var navigationMode: SalesNavigationMode
+    let onProfileTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 30) {
-            HStack(spacing: 12) {
-                Text(associate.initials)
-                    .font(.title3.weight(.black))
-                    .foregroundStyle(.white)
-                    .frame(width: 54, height: 54)
-                    .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(associate.role)
-                        .font(.headline.weight(.bold))
-                    Text(associate.boutique)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.muted)
-                }
-                .minimumScaleFactor(0.75)
-            }
-            .padding(.top, 26)
-
+        VStack(alignment: .leading, spacing: 24) {
             VStack(spacing: 12) {
                 ForEach(SalesAssociateTab.allCases) { tab in
                     SidebarItem(
@@ -220,10 +253,17 @@ private struct SidebarView: View {
                     }
                 }
             }
+            .padding(.top, 58)
 
             Spacer()
+
+            SidebarAssociateProfileButton(
+                associate: associate,
+                action: onProfileTap
+            )
         }
         .padding(.horizontal, 18)
+        .padding(.bottom, 22)
         .background(.white.opacity(0.55))
         .overlay(alignment: .trailing) {
             Rectangle()
@@ -232,7 +272,7 @@ private struct SidebarView: View {
         }
         .contentShape(Rectangle())
         .gesture(sidebarCollapseGesture)
-        .accessibilityAction(named: "Show Top Tabs") {
+        .accessibilityAction(named: "Collapse Sidebar") {
             navigationMode = .top
         }
     }
@@ -252,53 +292,39 @@ private struct SidebarView: View {
 }
 
 private struct TopNavigationBar: View {
-    let associate: AssociateProfile
-
     @Binding var selectedTab: SalesAssociateTab
     @Binding var navigationMode: SalesNavigationMode
 
     var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 14) {
+            Spacer(minLength: 0)
+
             HStack(spacing: 12) {
-                Text(associate.initials)
-                    .font(.headline.weight(.black))
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(associate.role)
-                        .font(.headline.weight(.bold))
-                    Text(associate.boutique)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.muted)
+                NavigationModeButton(symbol: "sidebar.left") {
+                    navigationMode = .sidebar
                 }
-            }
-            .frame(width: 214, alignment: .leading)
+                .frame(width: 52)
 
-            NavigationModeButton(title: "", symbol: "sidebar.left") {
-                navigationMode = .sidebar
-            }
-            .frame(width: 48)
-
-            HStack(spacing: 8) {
-                ForEach(SalesAssociateTab.allCases) { tab in
-                    TopNavigationItem(
-                        tab: tab,
-                        isSelected: selectedTab == tab
-                    ) {
-                        selectedTab = tab
+                HStack(spacing: 8) {
+                    ForEach(SalesAssociateTab.allCases) { tab in
+                        TopNavigationItem(
+                            tab: tab,
+                            isSelected: selectedTab == tab
+                        ) {
+                            selectedTab = tab
+                        }
                     }
                 }
+                .padding(6)
+                .background(.white.opacity(0.62), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Theme.line.opacity(0.6), lineWidth: 1)
+                )
             }
-            .padding(6)
-            .background(.white.opacity(0.62), in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Theme.line.opacity(0.6), lineWidth: 1)
-            )
+            .fixedSize(horizontal: true, vertical: false)
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 16)
@@ -310,6 +336,7 @@ private struct TopNavigationBar: View {
         }
     }
 }
+
 //Top Navigation view
 private struct TopNavigationItem: View {
     let tab: SalesAssociateTab
@@ -321,8 +348,7 @@ private struct TopNavigationItem: View {
             Label(tab.rawValue, systemImage: tab.symbol)
                 .font(.subheadline.weight(.black))
                 .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 16)
                 .frame(height: 44)
                 .foregroundStyle(isSelected ? .white : Theme.muted)
                 .background(
@@ -335,35 +361,26 @@ private struct TopNavigationItem: View {
 }
 
 private struct NavigationModeButton: View {
-    let title: String
     let symbol: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            ViewThatFits(in: .horizontal) {
-                if !title.isEmpty {
-                    Label(title, systemImage: symbol)
-                        .font(.subheadline.weight(.black))
-                        .lineLimit(1)
-                }
-
-                Image(systemName: symbol)
-                    .font(.headline.weight(.black))
-            }
-            .frame(maxWidth: .infinity, minHeight: 42)
-            .padding(.horizontal, 12)
-            .foregroundStyle(Theme.gold)
-            .background(.white.opacity(0.70), in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Theme.line.opacity(0.62), lineWidth: 1)
-            )
+            Image(systemName: symbol)
+                .font(.headline.weight(.black))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .foregroundStyle(Theme.gold)
+                .background(.white.opacity(0.70), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Theme.line.opacity(0.62), lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title.isEmpty ? "Show Sidebar" : title)
+        .accessibilityLabel("Show Sidebar")
     }
 }
+
 // SideBar items
 private struct SidebarItem: View {
     let tab: SalesAssociateTab
@@ -396,12 +413,150 @@ private struct SidebarItem: View {
         .buttonStyle(.plain)
     }
 }
+
+private struct SidebarAssociateProfileButton: View {
+    let associate: AssociateProfile
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(associate.initials)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(associate.name)
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Text(associate.role)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                    Text(associate.boutique)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.muted.opacity(0.85))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+            .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Theme.line.opacity(0.62), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open sales associate profile")
+    }
+}
+
+private struct AssociateProfileSheet: View {
+    let associate: AssociateProfile
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 14) {
+                Text(associate.initials)
+                    .font(.title.weight(.black))
+                    .foregroundStyle(.white)
+                    .frame(width: 68, height: 68)
+                    .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(associate.name)
+                        .font(.title2.weight(.black))
+                        .foregroundStyle(Theme.ink)
+                    Text(associate.role)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                    Text(associate.boutique)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Theme.gold)
+                }
+
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.muted)
+                        .frame(width: 42, height: 42)
+                        .background(.white.opacity(0.74), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(spacing: 12) {
+                AssociateProfileInfoRow(title: "Email", value: associate.email, icon: "envelope")
+                AssociateProfileInfoRow(title: "Phone", value: associate.phone, icon: "phone")
+                AssociateProfileInfoRow(title: "Employee ID", value: associate.employeeID, icon: "person.text.rectangle")
+                AssociateProfileInfoRow(title: "Shift", value: associate.shift, icon: "clock")
+                AssociateProfileInfoRow(title: "Permissions", value: "Clienteling, selling, stock visibility, issue intake", icon: "checkmark.shield")
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(26)
+        .frame(minWidth: 420, minHeight: 430)
+        .background(Theme.background)
+    }
+}
+
+private struct AssociateProfileInfoRow: View {
+    let title: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 44, height: 44)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title.uppercased())
+                    .font(.caption.weight(.black))
+                    .tracking(1.1)
+                    .foregroundStyle(Theme.muted)
+                Text(value)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
 // client content
 private struct ClientelingContent: View {
     let availableClients: [ClientProfile]
+    let onStartGuestClient: () -> Void
+    let onBuildCuratedCart: (ClientProfile) -> Void
+
+    @Binding var recentlyViewedClients: [ClientProfile]
 
     @State private var query = ""
-    @State private var searchedClients: [ClientProfile] = []
     @State private var selectedClient: ClientProfile?
     @State private var missedSearchTerm: String?
 
@@ -414,23 +569,32 @@ private struct ClientelingContent: View {
                     if let selectedClient {
                         ClientSearchPanel(
                             query: $query,
-                            clients: searchedClients,
+                            clients: recentlyViewedClients,
                             selectedClient: $selectedClient,
                             missedSearchTerm: $missedSearchTerm,
-                            onSearch: searchExistingClient
+                            onSearch: searchExistingClient,
+                            onSelectClient: openClientProfile,
+                            onStartClient: onStartGuestClient
                         )
                         .frame(width: 318)
 
-                        ClientDetailCard(client: selectedClient)
+                        ClientDetailCard(
+                            client: selectedClient,
+                            onBuildCuratedCart: {
+                                onBuildCuratedCart(selectedClient)
+                            }
+                        )
                             .frame(maxWidth: .infinity)
                             .transition(.opacity.combined(with: .move(edge: .trailing)))
                     } else {
                         ClientSearchPanel(
                             query: $query,
-                            clients: searchedClients,
+                            clients: recentlyViewedClients,
                             selectedClient: $selectedClient,
                             missedSearchTerm: $missedSearchTerm,
-                            onSearch: searchExistingClient
+                            onSearch: searchExistingClient,
+                            onSelectClient: openClientProfile,
+                            onStartClient: onStartGuestClient
                         )
                         .frame(maxWidth: .infinity)
                     }
@@ -442,6 +606,7 @@ private struct ClientelingContent: View {
         }
         .scrollIndicators(.hidden)
     }
+
 //search the existing client
     private func searchExistingClient() {
         let searchTerm = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -457,12 +622,18 @@ private struct ClientelingContent: View {
         }
 
         missedSearchTerm = nil
-
-        if !searchedClients.contains(match) {
-            searchedClients.insert(match, at: 0)
-        }
-
+        rememberRecentlyViewed(match)
         query = ""
+    }
+
+    private func openClientProfile(_ client: ClientProfile) {
+        rememberRecentlyViewed(client)
+        selectedClient = client
+    }
+
+    private func rememberRecentlyViewed(_ client: ClientProfile) {
+        recentlyViewedClients.removeAll { $0.id == client.id }
+        recentlyViewedClients.insert(client, at: 0)
     }
 }
 
@@ -485,6 +656,8 @@ private struct ClientSearchPanel: View {
     @Binding var selectedClient: ClientProfile?
     @Binding var missedSearchTerm: String?
     let onSearch: () -> Void
+    let onSelectClient: (ClientProfile) -> Void
+    let onStartClient: () -> Void
 
     var body: some View {
         Card {
@@ -523,14 +696,20 @@ private struct ClientSearchPanel: View {
                 )
 
                 if let missedSearchTerm {
-                    NoProfileFoundCard(searchTerm: missedSearchTerm)
+                    NoProfileFoundCard(searchTerm: missedSearchTerm, onStartClient: onStartClient)
                 }
 
                 if !clients.isEmpty {
-                    VStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Recently Viewed")
+                            .font(.caption.weight(.black))
+                            .tracking(1.1)
+                            .foregroundStyle(Theme.muted)
+                            .padding(.horizontal, 4)
+
                         ForEach(clients) { client in
                             Button {
-                                selectedClient = client
+                                onSelectClient(client)
                             } label: {
                                 ClientResultRow(
                                     client: client,
@@ -548,9 +727,11 @@ private struct ClientSearchPanel: View {
         }
     }
 }
+
 // if there is no profile avialable
 private struct NoProfileFoundCard: View {
     let searchTerm: String
+    let onStartClient: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -573,8 +754,7 @@ private struct NoProfileFoundCard: View {
                 Spacer()
             }
 
-            Button {
-            } label: {
+            Button(action: onStartClient) {
                 Label("Start Client", systemImage: "person.badge.plus")
                     .font(.headline.weight(.bold))
                     .frame(maxWidth: .infinity, minHeight: 50)
@@ -624,6 +804,7 @@ private struct ClientResultRow: View {
 
 private struct ClientDetailCard: View {
     let client: ClientProfile
+    let onBuildCuratedCart: () -> Void
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -701,8 +882,7 @@ private struct ClientDetailCard: View {
                         ClientTaskRow(task: task)
                     }
 
-                    Button {
-                    } label: {
+                    Button(action: onBuildCuratedCart) {
                         Label("Build Curated Cart", systemImage: "bag")
                             .font(.headline.weight(.black))
                             .frame(maxWidth: .infinity, minHeight: 54)
@@ -792,14 +972,27 @@ private struct ClientAvatar: View {
 private struct SellContent: View {
     let categories: [ProductCategory]
     let products: [SalesProduct]
+    @Binding var session: SellingSessionState
+    let onDiscardClient: () -> Void
+    let onCreateProfile: (ClientProfile) -> Void
 
     @State private var query = ""
     @State private var selectedCategoryID: String
     @State private var selectedProduct: SalesProduct?
+    @State private var returnPanelAfterProfile: SellingSessionPanel = .wishlist
 
-    init(categories: [ProductCategory], products: [SalesProduct]) {
+    init(
+        categories: [ProductCategory],
+        products: [SalesProduct],
+        session: Binding<SellingSessionState>,
+        onDiscardClient: @escaping () -> Void,
+        onCreateProfile: @escaping (ClientProfile) -> Void
+    ) {
         self.categories = categories
         self.products = products
+        _session = session
+        self.onDiscardClient = onDiscardClient
+        self.onCreateProfile = onCreateProfile
         _selectedCategoryID = State(initialValue: categories.first?.id ?? "")
     }
 
@@ -822,35 +1015,126 @@ private struct SellContent: View {
         return Array((categoryMatches.isEmpty ? products : categoryMatches).prefix(5))
     }
 
+    private var wishlistProducts: [SalesProduct] {
+        products.filter { session.wishlistProductIDs.contains($0.id) }
+    }
+
+    private var cartProducts: [SalesProduct] {
+        products.filter { session.cartProductIDs.contains($0.id) }
+    }
+
+    private var selectedPanelTitle: String {
+        session.activePanel == .cart ? "View Cart" : "Wishlist"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SellHeader()
+                SellHeader(session: session)
 
-                SellSearchRow(query: $query)
+                if session.activePanel == nil {
+                    SellSearchRow(
+                        query: $query,
+                        showsClientActions: session.hasActiveClient,
+                        wishlistCount: session.wishlistItemCount,
+                        cartCount: session.cartItemCount,
+                        onOpenWishlist: {
+                            selectedProduct = nil
+                            session.activePanel = .wishlist
+                        },
+                        onOpenCart: {
+                            selectedProduct = nil
+                            session.activePanel = .cart
+                        }
+                    )
 
-                CategoryStrip(
-                    categories: categories,
-                    selectedCategoryID: selectedCategoryID
-                ) { category in
-                    selectedCategoryID = category.id
-                    selectedProduct = nil
-                    query = ""
+                    CategoryStrip(
+                        categories: categories,
+                        selectedCategoryID: selectedCategoryID
+                    ) { category in
+                        selectedCategoryID = category.id
+                        selectedProduct = nil
+                        query = ""
+                        session.activePanel = nil
+                    }
                 }
 
-                if let selectedProduct {
+                if session.activePanel == .wishlist {
+                    collectionPanelLayout(
+                        panel: .wishlist,
+                        products: wishlistProducts,
+                        count: session.wishlistItemCount,
+                        title: "Wishlist",
+                        subtitle: "Saved for \(session.displayName)",
+                        emptyTitle: "No wishlist items yet",
+                        emptySubtitle: "Tap the heart on product cards to save pieces here.",
+                        primaryActionTitle: "Move All Items to Cart",
+                        primaryActionIcon: "bag.badge.plus",
+                        quantityForProduct: { _ in nil },
+                        onPrimaryAction: {
+                            session.moveWishlistToCart()
+                            selectedProduct = nil
+                        }
+                    )
+                } else if session.activePanel == .cart {
+                    collectionPanelLayout(
+                        panel: .cart,
+                        products: cartProducts,
+                        count: session.cartItemCount,
+                        title: "View Cart",
+                        subtitle: "Cart for \(session.displayName)",
+                        emptyTitle: "Cart is empty",
+                        emptySubtitle: "Use Add to Cart from product details to build this order.",
+                        primaryActionTitle: "Proceed to Pay",
+                        primaryActionIcon: "creditcard",
+                        quantityForProduct: { product in
+                            session.quantity(for: product)
+                        },
+                        onPrimaryAction: {
+                        }
+                    )
+                } else if session.activePanel == .createProfile {
+                    CreateClientProfilePanel(
+                        guestID: session.guestID ?? "Guest",
+                        onSave: { profile in
+                            session.createdClient = profile
+                            session.activePanel = returnPanelAfterProfile
+                            onCreateProfile(profile)
+                        }
+                    )
+                } else if let selectedProduct {
                     HStack(alignment: .top, spacing: 18) {
                         SellProductBrowser(
                             title: activeCategoryTitle,
                             products: filteredProducts,
                             suggestedProducts: suggestedProducts,
-                            selectedProduct: selectedProduct
+                            selectedProduct: selectedProduct,
+                            allowsWishlist: session.hasActiveClient,
+                            isWishlisted: { product in
+                                session.isWishlisted(product)
+                            },
+                            onToggleWishlist: { product in
+                                session.toggleWishlist(product)
+                            }
                         ) { product in
                             self.selectedProduct = product
                         }
                         .frame(maxWidth: .infinity)
 
-                        SellProductDetailCard(product: selectedProduct)
+                        SellProductDetailCard(
+                            product: selectedProduct,
+                            allowsClientActions: session.hasActiveClient,
+                            isWishlisted: session.isWishlisted(selectedProduct),
+                            onClose: {
+                                self.selectedProduct = nil
+                            },
+                            onToggleWishlist: {
+                                session.toggleWishlist(selectedProduct)
+                            },
+                            onAddToCart: { quantity in
+                                session.addToCart(selectedProduct, quantity: quantity)
+                            }
+                        )
                             .id(selectedProduct.id)
                             .frame(width: 390)
                             .transition(.opacity.combined(with: .move(edge: .trailing)))
@@ -860,9 +1144,17 @@ private struct SellContent: View {
                         title: activeCategoryTitle,
                         products: filteredProducts,
                         suggestedProducts: suggestedProducts,
-                        selectedProduct: nil
+                        selectedProduct: nil,
+                        allowsWishlist: session.hasActiveClient,
+                        isWishlisted: { product in
+                            session.isWishlisted(product)
+                        },
+                        onToggleWishlist: { product in
+                            session.toggleWishlist(product)
+                        }
                     ) { product in
                         selectedProduct = product
+                        session.activePanel = nil
                     }
                 }
             }
@@ -872,16 +1164,100 @@ private struct SellContent: View {
         .scrollIndicators(.hidden)
         .animation(.snappy(duration: 0.28), value: selectedProduct)
     }
+
+    @ViewBuilder
+    private func collectionPanelLayout(
+        panel: SellingSessionPanel,
+        products: [SalesProduct],
+        count: Int,
+        title: String,
+        subtitle: String,
+        emptyTitle: String,
+        emptySubtitle: String,
+        primaryActionTitle: String,
+        primaryActionIcon: String,
+        quantityForProduct: @escaping (SalesProduct) -> Int?,
+        onPrimaryAction: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            SellingCollectionPanel(
+                title: title,
+                subtitle: subtitle,
+                emptyTitle: emptyTitle,
+                emptySubtitle: emptySubtitle,
+                products: products,
+                itemCount: count,
+                hasCreatedProfile: session.hasCreatedProfile,
+                primaryActionTitle: primaryActionTitle,
+                primaryActionIcon: primaryActionIcon,
+                quantityForProduct: quantityForProduct,
+                onSelectProduct: { product in
+                    selectedProduct = product
+                },
+                onBack: {
+                    selectedProduct = nil
+                    session.activePanel = nil
+                },
+                onDiscardClient: onDiscardClient,
+                onProceed: {
+                    returnPanelAfterProfile = panel
+                    session.activePanel = .createProfile
+                },
+                onPrimaryAction: onPrimaryAction
+            )
+            .frame(maxWidth: .infinity)
+
+            if let selectedProduct {
+                SellProductDetailCard(
+                    product: selectedProduct,
+                    allowsClientActions: session.hasActiveClient,
+                    isWishlisted: session.isWishlisted(selectedProduct),
+                    onClose: {
+                        self.selectedProduct = nil
+                    },
+                    onToggleWishlist: {
+                        session.toggleWishlist(selectedProduct)
+                    },
+                    onAddToCart: { quantity in
+                        session.addToCart(selectedProduct, quantity: quantity)
+                    }
+                )
+                .id("\(selectedPanelTitle)-\(selectedProduct.id)")
+                .frame(width: 390)
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+        }
+    }
 }
 
 private struct SellHeader: View {
+    let session: SellingSessionState
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("9:41")
-                .font(.headline.weight(.bold))
-            Text("Sell")
-                .font(.system(size: 44, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.ink)
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("9:41")
+                    .font(.headline.weight(.bold))
+                Text("Sell")
+                    .font(.system(size: 44, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.ink)
+            }
+
+            Spacer()
+
+            if session.hasActiveClient {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(session.hasCreatedProfile ? "Client Profile" : "Guest Session")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.muted)
+                    Text(session.displayName)
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.selected, in: Capsule())
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -889,6 +1265,11 @@ private struct SellHeader: View {
 
 private struct SellSearchRow: View {
     @Binding var query: String
+    let showsClientActions: Bool
+    let wishlistCount: Int
+    let cartCount: Int
+    let onOpenWishlist: () -> Void
+    let onOpenCart: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -911,8 +1292,20 @@ private struct SellSearchRow: View {
             )
 
             ToolbarPillButton(title: "Filters", icon: "slider.horizontal.3")
-            ToolbarPillButton(title: "Wishlist", icon: "heart")
-            ToolbarPillButton(title: "View Cart", icon: "bag")
+            if showsClientActions {
+                ToolbarPillButton(
+                    title: "Wishlist",
+                    icon: "heart",
+                    count: wishlistCount,
+                    action: onOpenWishlist
+                )
+                ToolbarPillButton(
+                    title: "View Cart",
+                    icon: "bag",
+                    count: cartCount,
+                    action: onOpenCart
+                )
+            }
         }
     }
 }
@@ -920,19 +1313,31 @@ private struct SellSearchRow: View {
 private struct ToolbarPillButton: View {
     let title: String
     let icon: String
+    var count: Int = 0
+    var action: () -> Void = {}
 
     var body: some View {
-        Button {
-        } label: {
-            Label(title, systemImage: icon)
-                .font(.headline.weight(.bold))
-                .lineLimit(1)
-                .padding(.horizontal, 18)
-                .frame(height: 56)
-                .foregroundStyle(Theme.ink)
-                .background(.white.opacity(0.74), in: Capsule())
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: icon)
+                    .font(.title2.weight(.black))
+                    .frame(width: 54, height: 54)
+                    .foregroundStyle(Theme.ink)
+
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 22, minHeight: 22)
+                        .padding(.horizontal, 4)
+                        .background(Theme.goldGradient, in: Capsule())
+                        .offset(x: 5, y: -3)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(count > 0 ? "\(title), \(count) items" : title)
     }
 }
 
@@ -976,6 +1381,9 @@ private struct SellProductBrowser: View {
     let products: [SalesProduct]
     let suggestedProducts: [SalesProduct]
     let selectedProduct: SalesProduct?
+    let allowsWishlist: Bool
+    let isWishlisted: (SalesProduct) -> Bool
+    let onToggleWishlist: (SalesProduct) -> Void
     let onSelect: (SalesProduct) -> Void
 
     private let columns = [
@@ -984,7 +1392,13 @@ private struct SellProductBrowser: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            SuggestedProductsRow(products: suggestedProducts, onSelect: onSelect)
+            SuggestedProductsRow(
+                products: suggestedProducts,
+                allowsWishlist: allowsWishlist,
+                isWishlisted: isWishlisted,
+                onToggleWishlist: onToggleWishlist,
+                onSelect: onSelect
+            )
 
             Card {
                 VStack(alignment: .leading, spacing: 16) {
@@ -994,12 +1408,11 @@ private struct SellProductBrowser: View {
 
                         Spacer()
 
-                        Label("Filters", systemImage: "slider.horizontal.3")
-                            .font(.caption.weight(.black))
-                            .foregroundStyle(Theme.gold)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Theme.selected, in: Capsule())
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.title3.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                            .frame(width: 42, height: 42)
+                            .accessibilityLabel("Filters")
                     }
 
                     if products.isEmpty {
@@ -1019,7 +1432,12 @@ private struct SellProductBrowser: View {
                             ForEach(products) { product in
                                 ProductGridCard(
                                     product: product,
-                                    isSelected: selectedProduct == product
+                                    isSelected: selectedProduct == product,
+                                    allowsWishlist: allowsWishlist,
+                                    isWishlisted: isWishlisted(product),
+                                    onToggleWishlist: {
+                                        onToggleWishlist(product)
+                                    }
                                 ) {
                                     onSelect(product)
                                 }
@@ -1035,6 +1453,9 @@ private struct SellProductBrowser: View {
 
 private struct SuggestedProductsRow: View {
     let products: [SalesProduct]
+    let allowsWishlist: Bool
+    let isWishlisted: (SalesProduct) -> Bool
+    let onToggleWishlist: (SalesProduct) -> Void
     let onSelect: (SalesProduct) -> Void
 
     var body: some View {
@@ -1059,7 +1480,14 @@ private struct SuggestedProductsRow: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 12) {
                         ForEach(products) { product in
-                            SuggestedProductCard(product: product) {
+                            SuggestedProductCard(
+                                product: product,
+                                allowsWishlist: allowsWishlist,
+                                isWishlisted: isWishlisted(product),
+                                onToggleWishlist: {
+                                    onToggleWishlist(product)
+                                }
+                            ) {
                                 onSelect(product)
                             }
                             .frame(width: 170)
@@ -1074,107 +1502,147 @@ private struct SuggestedProductsRow: View {
 
 private struct SuggestedProductCard: View {
     let product: SalesProduct
+    let allowsWishlist: Bool
+    let isWishlisted: Bool
+    let onToggleWishlist: () -> Void
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                ProductImageView(imageName: product.imageName)
-                    .frame(height: 118)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        VStack(alignment: .leading, spacing: 8) {
+            ProductImageView(imageName: product.imageName)
+                .frame(height: 118)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if allowsWishlist {
+                        Button(action: onToggleWishlist) {
+                            Image(systemName: isWishlisted ? "heart.fill" : "heart")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(isWishlisted ? Theme.gold : Theme.ink)
+                                .frame(width: 30, height: 30)
+                                .background(.white.opacity(0.82), in: Circle())
+                                .padding(7)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isWishlisted ? "Remove from wishlist" : "Add to wishlist")
+                    }
+                }
 
-                Text(product.name)
-                    .font(.subheadline.weight(.black))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
+            Text(product.name)
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
 
-                Text(product.price)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Theme.muted)
-            }
-            .padding(10)
-            .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Theme.line.opacity(0.45), lineWidth: 1)
-            )
+            Text(product.price)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Theme.muted)
         }
-        .buttonStyle(.plain)
+        .padding(10)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture(perform: onTap)
     }
 }
 
 private struct ProductGridCard: View {
     let product: SalesProduct
     let isSelected: Bool
+    let allowsWishlist: Bool
+    let isWishlisted: Bool
+    let onToggleWishlist: () -> Void
     let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 10) {
-                ProductImageView(imageName: product.imageName)
-                    .frame(height: 142)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        Image(systemName: product.isWishlisted ? "heart.fill" : "heart")
-                            .font(.subheadline.weight(.black))
-                            .foregroundStyle(product.isWishlisted ? Theme.gold : Theme.ink)
-                            .frame(width: 34, height: 34)
-                            .background(.white.opacity(0.78), in: Circle())
-                            .padding(8)
+        VStack(alignment: .leading, spacing: 10) {
+            ProductImageView(imageName: product.imageName)
+                .frame(height: 142)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if allowsWishlist {
+                        Button(action: onToggleWishlist) {
+                            Image(systemName: isWishlisted ? "heart.fill" : "heart")
+                                .font(.subheadline.weight(.black))
+                                .foregroundStyle(isWishlisted ? Theme.gold : Theme.ink)
+                                .frame(width: 34, height: 34)
+                                .background(.white.opacity(0.78), in: Circle())
+                                .padding(8)
+                        }
+                        .buttonStyle(.plain)
                     }
-
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(product.name)
-                            .font(.headline.weight(.black))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
-                        Text("\(product.audience) • \(product.id)")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Theme.muted)
-                    }
-
-                    Spacer(minLength: 8)
                 }
 
-                HStack {
-                    Text(product.price)
-                        .font(.subheadline.weight(.black))
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(product.name)
+                        .font(.headline.weight(.black))
                         .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    Text("\(product.audience) • \(product.id)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Theme.muted)
+                }
 
-                    Spacer()
+                Spacer(minLength: 8)
+            }
 
-                    if let badge = product.badge {
-                        Text(badge)
-                            .font(.caption2.weight(.black))
-                            .foregroundStyle(Theme.gold)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(Theme.selected, in: Capsule())
-                    }
+            HStack {
+                Text(product.price)
+                    .font(.subheadline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                Spacer()
+
+                if let badge = product.badge {
+                    Text(badge)
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Theme.selected, in: Capsule())
                 }
             }
-            .padding(12)
-            .background(isSelected ? Theme.selected.opacity(0.82) : .white.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(isSelected ? Theme.gold.opacity(0.45) : Theme.line.opacity(0.45), lineWidth: 1.2)
-            )
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .background(isSelected ? Theme.selected.opacity(0.82) : .white.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(isSelected ? Theme.gold.opacity(0.45) : Theme.line.opacity(0.45), lineWidth: 1.2)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .onTapGesture(perform: onTap)
     }
 }
 
 private struct SellProductDetailCard: View {
     let product: SalesProduct
+    let allowsClientActions: Bool
+    let isWishlisted: Bool
+    let onClose: () -> Void
+    let onToggleWishlist: () -> Void
+    let onAddToCart: (Int) -> Void
 
     @State private var selectedSize: String
     @State private var selectedMaterial: String
     @State private var selectedColor: String
     @State private var quantity = 1
 
-    init(product: SalesProduct) {
+    init(
+        product: SalesProduct,
+        allowsClientActions: Bool,
+        isWishlisted: Bool,
+        onClose: @escaping () -> Void,
+        onToggleWishlist: @escaping () -> Void,
+        onAddToCart: @escaping (Int) -> Void
+    ) {
         self.product = product
+        self.allowsClientActions = allowsClientActions
+        self.isWishlisted = isWishlisted
+        self.onClose = onClose
+        self.onToggleWishlist = onToggleWishlist
+        self.onAddToCart = onAddToCart
         _selectedSize = State(initialValue: product.sizes.first ?? "One size")
         _selectedMaterial = State(initialValue: product.materials.first ?? "Standard")
         _selectedColor = State(initialValue: product.colors.first ?? "Default")
@@ -1186,13 +1654,16 @@ private struct SellProductDetailCard: View {
                 ProductImageView(imageName: product.imageName)
                     .frame(height: 248)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        Image(systemName: product.isWishlisted ? "heart.fill" : "heart")
+                    .overlay(alignment: .topLeading) {
+                        Button(action: onClose) {
+                            Image(systemName: "xmark")
                             .font(.headline.weight(.black))
-                            .foregroundStyle(product.isWishlisted ? Theme.gold : Theme.ink)
+                            .foregroundStyle(Theme.ink)
                             .frame(width: 42, height: 42)
                             .background(.white.opacity(0.78), in: Circle())
                             .padding(12)
+                        }
+                        .buttonStyle(.plain)
                     }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -1258,29 +1729,475 @@ private struct SellProductDetailCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.selected.opacity(0.62), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-                HStack(spacing: 12) {
-                    Button {
-                    } label: {
-                        Image(systemName: "heart")
+                if allowsClientActions {
+                    HStack(spacing: 12) {
+                        Button(action: onToggleWishlist) {
+                            Label(isWishlisted ? "Saved" : "Wishlist", systemImage: isWishlisted ? "heart.fill" : "heart")
+                                .font(.headline.weight(.black))
+                                .frame(maxWidth: .infinity, minHeight: 54)
+                                .foregroundStyle(Theme.ink)
+                                .background(.white.opacity(0.76), in: Capsule())
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Theme.line.opacity(0.55), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            onAddToCart(quantity)
+                        } label: {
+                            Label("Add to Cart", systemImage: "bag.badge.plus")
+                                .font(.headline.weight(.black))
+                                .frame(maxWidth: .infinity, minHeight: 54)
+                                .foregroundStyle(.white)
+                                .background(Theme.goldGradient, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SellingCollectionPanel: View {
+    let title: String
+    let subtitle: String
+    let emptyTitle: String
+    let emptySubtitle: String
+    let products: [SalesProduct]
+    let itemCount: Int
+    let hasCreatedProfile: Bool
+    let primaryActionTitle: String
+    let primaryActionIcon: String
+    let quantityForProduct: (SalesProduct) -> Int?
+    let onSelectProduct: (SalesProduct) -> Void
+    let onBack: () -> Void
+    let onDiscardClient: () -> Void
+    let onProceed: () -> Void
+    let onPrimaryAction: () -> Void
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .center, spacing: 12) {
+                    Button(action: onBack) {
+                        Image(systemName: "chevron.left")
                             .font(.headline.weight(.black))
-                            .frame(width: 54, height: 54)
                             .foregroundStyle(Theme.ink)
-                            .background(.white.opacity(0.68), in: Circle())
+                            .frame(width: 44, height: 44)
+                            .background(.white.opacity(0.72), in: Circle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Back to products")
 
-                    Button {
-                    } label: {
-                        Label("Add to Cart", systemImage: "bag.badge.plus")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.title2.weight(.black))
+                        Text(subtitle)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+
+                    Text("\(itemCount) item\(itemCount == 1 ? "" : "s")")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 8)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                if products.isEmpty {
+                    EmptySellingCollection(title: emptyTitle, subtitle: emptySubtitle)
+                } else {
+                    LazyVStack(spacing: 12) {
+                        ForEach(products) { product in
+                            Button {
+                                onSelectProduct(product)
+                            } label: {
+                                SellingCollectionRow(
+                                    product: product,
+                                    quantity: quantityForProduct(product)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if hasCreatedProfile {
+                    Button(action: onPrimaryAction) {
+                        Label(primaryActionTitle, systemImage: primaryActionIcon)
                             .font(.headline.weight(.black))
-                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .frame(maxWidth: .infinity, minHeight: 56)
                             .foregroundStyle(.white)
                             .background(Theme.goldGradient, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .disabled(products.isEmpty)
+                    .opacity(products.isEmpty ? 0.55 : 1)
+                } else {
+                    HStack(spacing: 12) {
+                        Button(action: onDiscardClient) {
+                            Label("Discard Client", systemImage: "trash")
+                                .font(.headline.weight(.black))
+                                .frame(maxWidth: .infinity, minHeight: 56)
+                                .foregroundStyle(Theme.ink)
+                                .background(.white.opacity(0.70), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onProceed) {
+                            Label("Proceed", systemImage: "person.badge.plus")
+                                .font(.headline.weight(.black))
+                                .frame(maxWidth: .infinity, minHeight: 56)
+                                .foregroundStyle(.white)
+                                .background(Theme.goldGradient, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 560, alignment: .topLeading)
+        }
+    }
+}
+
+private struct EmptySellingCollection: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "bag.badge.questionmark")
+                .font(.system(size: 42, weight: .black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 78, height: 78)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+
+            Text(title)
+                .font(.title3.weight(.black))
+                .foregroundStyle(Theme.ink)
+            Text(subtitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.muted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, minHeight: 280)
+        .background(.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
+private struct SellingCollectionRow: View {
+    let product: SalesProduct
+    let quantity: Int?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ProductImageView(imageName: product.imageName)
+                .frame(width: 84, height: 84)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(product.name)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                Text("\(product.audience) • \(product.id)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+                Text(quantityText)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.gold)
+            }
+
+            Spacer()
+
+            Text(product.price)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
+        }
+        .padding(14)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+
+    private var quantityText: String {
+        guard let quantity, quantity > 0 else {
+            return "Wishlist item"
+        }
+        return "Quantity: \(quantity)"
+    }
+}
+
+private struct CreateClientProfilePanel: View {
+    let guestID: String
+    let onSave: (ClientProfile) -> Void
+
+    @State private var fullName = ""
+    @State private var phone = ""
+    @State private var email = ""
+    @State private var birthday = ""
+    @State private var preferredStyle = "N/A"
+    @State private var budget = "N/A"
+    @State private var size = "N/A"
+    @State private var materialPreference = "N/A"
+    @State private var colorPreference = ""
+    @State private var notes = ""
+    @State private var consentAccepted = false
+
+    private let styles = ["N/A", "Minimal", "Statement", "Classic", "Bridal", "Evening"]
+    private let budgets = ["N/A", "Rs. 50K+", "Rs. 1L+", "Rs. 2L+", "Rs. 5L+"]
+    private let sizes = ["N/A", "EU 36", "EU 38", "EU 40", "One size"]
+    private let materials = ["N/A", "Gold hardware", "Silver hardware", "Pearl", "Diamond", "Leather"]
+
+    private var canSave: Bool {
+        !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Create Client Profile")
+                            .font(.title2.weight(.black))
+                        Text("Convert \(guestID) into a saved client profile")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+
+                    Text("Required fields marked")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 8)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ProfileFormSection(title: "Identity") {
+                            ProfileTextField(title: "Full Name *", placeholder: "Client name", text: $fullName)
+                            ProfileTextField(title: "Phone *", placeholder: "+91 phone number", text: $phone)
+                            ProfileTextField(title: "Email", placeholder: "optional email", text: $email)
+                            ProfileTextField(title: "Birthday / Occasion", placeholder: "optional date or occasion", text: $birthday)
+                        }
+
+                        ProfileFormSection(title: "Preferences") {
+                            ProfileDropdown(title: "Style", options: styles, selection: $preferredStyle)
+                            ProfileDropdown(title: "Budget", options: budgets, selection: $budget)
+                            ProfileDropdown(title: "Size", options: sizes, selection: $size)
+                            ProfileDropdown(title: "Material", options: materials, selection: $materialPreference)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        ProfileFormSection(title: "Selling Notes") {
+                            ProfileTextField(title: "Color Preference", placeholder: "champagne, black, emerald...", text: $colorPreference)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Client Note")
+                                    .font(.headline.weight(.black))
+                                TextEditor(text: $notes)
+                                    .scrollContentBackground(.hidden)
+                                    .padding(10)
+                                    .frame(minHeight: 152)
+                                    .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                                    )
+                                    .overlay(alignment: .topLeading) {
+                                        if notes.isEmpty {
+                                            Text("Add preferences, occasion, product interest, or follow-up promise...")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(Theme.muted.opacity(0.66))
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 18)
+                                        }
+                                    }
+                            }
+
+                            Toggle("Client allows saved preferences and purchase history visibility", isOn: $consentAccepted)
+                                .font(.headline.weight(.bold))
+                                .tint(Theme.gold)
+                        }
+
+                        Button {
+                            onSave(makeProfile())
+                        } label: {
+                            Label("Save Profile", systemImage: "checkmark.seal")
+                                .font(.headline.weight(.black))
+                                .frame(maxWidth: .infinity, minHeight: 56)
+                                .foregroundStyle(.white)
+                                .background(Theme.goldGradient, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSave)
+                        .opacity(canSave ? 1 : 0.55)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
+    }
+
+    private func makeProfile() -> ClientProfile {
+        let name = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let capturedPreferences = [
+            preferredStyle,
+            materialPreference,
+            colorPreference
+        ]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "N/A" }
+        let preferenceSummary = capturedPreferences.isEmpty ? "No preferences captured" : capturedPreferences.joined(separator: ", ")
+        let resolvedNote = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (capturedPreferences.isEmpty ? "New client profile created. Preferences pending." : "New client prefers \(preferenceSummary.lowercased()).")
+            : notes
+        let visibleAttributes = profileAttributes()
+
+        return ClientProfile(
+            id: "CL-\(Int.random(in: 2000...9999))",
+            phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
+            initials: initials(for: name),
+            name: name,
+            tier: "New Client",
+            boutique: "Mumbai",
+            lastVisit: "Today",
+            status: consentAccepted ? "Preferences visible" : "Profile created - preferences hidden",
+            note: resolvedNote,
+            attributes: visibleAttributes,
+            tasks: [
+                ClientTask(
+                    icon: consentAccepted ? "checkmark.shield" : "eye.slash",
+                    title: consentAccepted ? "Preference consent on" : "Preference consent pending",
+                    subtitle: consentAccepted ? "Preferences and history visible" : "Only identity is visible to sales associate"
+                ),
+                ClientTask(
+                    icon: "heart",
+                    title: capturedPreferences.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
+                    subtitle: capturedPreferences.isEmpty ? "No optional preference data saved" : (consentAccepted ? preferenceSummary : "Hidden until client allows visibility")
+                )
+            ]
+        )
+    }
+
+    private func profileAttributes() -> [ClientAttribute] {
+        var attributes: [ClientAttribute] = []
+        appendAttribute("Size", value: size, to: &attributes)
+        appendAttribute("Style", value: consentAccepted ? preferredStyle : "Hidden until consent", sourceValue: preferredStyle, to: &attributes)
+        appendAttribute("Budget", value: budget, to: &attributes)
+        appendAttribute("Preference", value: consentAccepted ? materialPreference : "Hidden until consent", sourceValue: materialPreference, to: &attributes)
+        appendAttribute("Color", value: consentAccepted ? colorPreference : "Hidden until consent", sourceValue: colorPreference, to: &attributes)
+        return attributes
+    }
+
+    private func appendAttribute(
+        _ title: String,
+        value: String,
+        sourceValue: String? = nil,
+        to attributes: inout [ClientAttribute]
+    ) {
+        let source = (sourceValue ?? value).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty && source != "N/A" else { return }
+        attributes.append(ClientAttribute(title: title, value: value))
+    }
+
+    private func initials(for name: String) -> String {
+        let parts = name.split(separator: " ")
+        let letters = parts.prefix(2).compactMap { $0.first }
+        return letters.isEmpty ? "GC" : letters.map(String.init).joined().uppercased()
+    }
+}
+
+private struct ProfileFormSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline.weight(.black))
+
+            content
+        }
+        .padding(16)
+        .background(.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct ProfileTextField: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption.weight(.black))
+                .foregroundStyle(Theme.muted)
+
+            TextField(placeholder, text: $text)
+                .font(.headline.weight(.bold))
+                .textInputAutocapitalization(.words)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 50)
+                .background(.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+}
+
+private struct ProfileDropdown: View {
+    let title: String
+    let options: [String]
+    @Binding var selection: String
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button(option) {
+                    selection = option
+                }
+            }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title.uppercased())
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.muted)
+                    Text(selection)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(Theme.ink)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.down")
+                    .font(.subheadline.weight(.black))
+                    .foregroundStyle(Theme.gold)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 58)
+            .background(.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1341,12 +2258,19 @@ struct ProductImageView: View {
     let imageName: String
 
     var body: some View {
-        Image(imageName)
-            .resizable()
-            .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            ZStack {
+                Theme.selected
+
+                Image(imageName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .scaleEffect(1.06)
+                    .offset(y: -8)
+            }
             .clipped()
-            .background(Theme.selected)
+        }
     }
 }
 private struct PlaceholderTabContent: View {
@@ -1557,6 +2481,7 @@ private struct BarColumn: View {
 private struct QuickActionsCard: View {
     let actions: [QuickAction]
     let metrics: [DashboardMetric]
+    let onStartClient: () -> Void
 
     private let actionColumns = [
         GridItem(.flexible(), spacing: 12),
@@ -1571,7 +2496,11 @@ private struct QuickActionsCard: View {
 
                 LazyVGrid(columns: actionColumns, spacing: 12) {
                     ForEach(actions) { action in
-                        ActionButton(action: action)
+                        ActionButton(action: action) {
+                            if action.title == "Start Client" {
+                                onStartClient()
+                            }
+                        }
                     }
                 }
 
@@ -1590,10 +2519,10 @@ private struct QuickActionsCard: View {
 
 private struct ActionButton: View {
     let action: QuickAction
+    let onTap: () -> Void
 
     var body: some View {
-        Button {
-        } label: {
+        Button(action: onTap) {
             VStack(spacing: 7) {
                 Image(systemName: action.icon)
                     .font(.title3.weight(.semibold))
