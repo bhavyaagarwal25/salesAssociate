@@ -172,7 +172,7 @@ struct SalesProduct: Identifiable, Equatable {
         return "\(percentage)% off"
     }
 
-    private static func parsePriceValue(_ priceText: String) -> Double {
+    nonisolated private static func parsePriceValue(_ priceText: String) -> Double {
         let normalizedText = priceText.lowercased()
         let numericText = normalizedText
             .components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)

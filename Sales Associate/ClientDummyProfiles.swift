@@ -1,11 +1,11 @@
 extension ClientProfile {
     static let sampleProfiles: [ClientProfile] = [
         ClientProfile(
-            id: "CL-1024",
+            id: "CL-1024",// unique identifier
             phone: "+91 98765 12024",
             initials: "AK",
             name: "Aisha Kapoor",
-            tier: "Platinum Tier",
+            tier: "Platinum Tier", // teir for vip purpose there is normal teir, silver tier,platinum,gold,diamond
             boutique: "Mumbai",
             lastVisit: "18 Jun",
             status: "Consent verified",
@@ -74,7 +74,7 @@ extension ClientProfile {
             tier: "Diamond Tier",
             boutique: "Mumbai",
             lastVisit: "12 Jun",
-            status: "Consent verified",
+            status: "Consent verified",// it shows that user gave their consent or not
             note: "Prefers quiet luxury, pearl tones, and lightweight handbags for travel.",
             attributes: [
                 ClientAttribute(title: "Size", value: "Small"),
