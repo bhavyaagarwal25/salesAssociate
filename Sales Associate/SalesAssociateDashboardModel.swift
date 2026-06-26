@@ -127,6 +127,7 @@ struct ProductCategory: Identifiable, Equatable {
 struct SalesProduct: Identifiable, Equatable {
     let id: String
     let name: String
+    let brand: String
     let categoryID: String
     let audience: String
     let price: String
@@ -148,9 +149,45 @@ struct SalesProduct: Identifiable, Equatable {
 
         guard !normalizedQuery.isEmpty else { return false }
 
-        return id.lowercased().contains(normalizedQuery)
-            || name.lowercased().contains(normalizedQuery)
-            || categoryID.lowercased().contains(normalizedQuery)
+        let searchableFields = [id, name, brand, categoryID] + sizes + materials + colors
+        return searchableFields.contains { $0.lowercased().contains(normalizedQuery) }
+    }
+
+    var priceValue: Double {
+        Self.parsePriceValue(price)
+    }
+
+    var originalPriceValue: Double? {
+        originalPrice.map(Self.parsePriceValue)
+    }
+
+    var hasDiscount: Bool {
+        guard let originalPriceValue else { return false }
+        return originalPriceValue > priceValue
+    }
+
+    var discountText: String? {
+        guard let originalPriceValue, originalPriceValue > priceValue else { return nil }
+        let percentage = Int(((1 - (priceValue / originalPriceValue)) * 100).rounded())
+        return "\(percentage)% off"
+    }
+
+    private static func parsePriceValue(_ priceText: String) -> Double {
+        let normalizedText = priceText.lowercased()
+        let numericText = normalizedText
+            .components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)
+            .joined()
+        let baseValue = Double(numericText) ?? 0
+
+        if normalizedText.contains("cr") {
+            return baseValue * 100
+        }
+
+        if normalizedText.contains("k") {
+            return baseValue / 100
+        }
+
+        return baseValue
     }
 }
 

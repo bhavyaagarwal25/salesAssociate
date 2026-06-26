@@ -327,13 +327,8 @@ private struct TopNavigationBar: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 28)
-        .padding(.vertical, 16)
-        .background(.white.opacity(0.54))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Theme.line)
-                .frame(height: 1)
-        }
+        .padding(.top, 10)
+        .padding(.bottom, 4)
     }
 }
 
@@ -1036,7 +1031,6 @@ private struct SellContent: View {
                     SellSearchRow(
                         query: $query,
                         showsClientActions: session.hasActiveClient,
-                        wishlistCount: session.wishlistItemCount,
                         cartCount: session.cartItemCount,
                         onOpenWishlist: {
                             selectedProduct = nil
@@ -1266,7 +1260,6 @@ private struct SellHeader: View {
 private struct SellSearchRow: View {
     @Binding var query: String
     let showsClientActions: Bool
-    let wishlistCount: Int
     let cartCount: Int
     let onOpenWishlist: () -> Void
     let onOpenCart: () -> Void
@@ -1296,13 +1289,13 @@ private struct SellSearchRow: View {
                 ToolbarPillButton(
                     title: "Wishlist",
                     icon: "heart",
-                    count: wishlistCount,
                     action: onOpenWishlist
                 )
                 ToolbarPillButton(
                     title: "View Cart",
                     icon: "bag",
                     count: cartCount,
+                    showsCount: true,
                     action: onOpenCart
                 )
             }
@@ -1314,30 +1307,28 @@ private struct ToolbarPillButton: View {
     let title: String
     let icon: String
     var count: Int = 0
+    var showsCount: Bool = false
     var action: () -> Void = {}
 
     var body: some View {
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.title2.weight(.black))
-                    .frame(width: 54, height: 54)
                     .foregroundStyle(Theme.ink)
+                    .frame(width: 30, height: 54)
 
-                if count > 0 {
+                if showsCount, count > 0 {
                     Text("\(count)")
-                        .font(.caption2.weight(.black))
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 22, minHeight: 22)
-                        .padding(.horizontal, 4)
-                        .background(Theme.goldGradient, in: Capsule())
-                        .offset(x: 5, y: -3)
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.gold)
                         .accessibilityHidden(true)
                 }
             }
+            .frame(minWidth: 54, minHeight: 54)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(count > 0 ? "\(title), \(count) items" : title)
+        .accessibilityLabel(showsCount && count > 0 ? "\(title), \(count) items" : title)
     }
 }
 

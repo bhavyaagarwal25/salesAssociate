@@ -157,8 +157,10 @@ extension IssueDashboard {
 extension ProductCategory {
     static let sampleCategories: [ProductCategory] = [
         ProductCategory(id: "handbags", title: "Handbags", icon: "handbag"),
+        ProductCategory(id: "clutches", title: "Clutches", icon: "bag"),
         ProductCategory(id: "watches", title: "Watches", icon: "applewatch"),
         ProductCategory(id: "jewellery", title: "Jewellery", icon: "sparkles"),
+        ProductCategory(id: "necklaces", title: "Necklaces", icon: "star.circle"),
         ProductCategory(id: "footwear", title: "Footwear", icon: "shoeprints.fill"),
         ProductCategory(id: "accessories", title: "Accessories", icon: "sunglasses")
     ]
@@ -168,7 +170,7 @@ extension SalesProduct {
     static let sampleProducts: [SalesProduct] = [
         SalesProduct(
             id: "HB-221",
-            name: "Serpenti Mini",
+            name: "Serpenti Mini", brand: "Bvlgari",
             categoryID: "handbags",
             audience: "Women",
             price: "Rs. 1.84L",
@@ -185,8 +187,8 @@ extension SalesProduct {
         ),
         SalesProduct(
             id: "HB-224",
-            name: "Noir Clutch",
-            categoryID: "handbags",
+            name: "Noir Clutch", brand: "Saint Laurent",
+            categoryID: "clutches",
             audience: "Women",
             price: "Rs. 2.10L",
             originalPrice: nil,
@@ -202,7 +204,7 @@ extension SalesProduct {
         ),
         SalesProduct(
             id: "HB-227",
-            name: "Pearl Sling",
+            name: "Pearl Sling", brand: "Chanel",
             categoryID: "handbags",
             audience: "Women",
             price: "Rs. 1.26L",
@@ -219,7 +221,7 @@ extension SalesProduct {
         ),
         SalesProduct(
             id: "JW-311",
-            name: "Diamond Set",
+            name: "Diamond Set", brand: "Cartier",
             categoryID: "jewellery",
             audience: "Women",
             price: "Rs. 3.60L",
@@ -236,8 +238,8 @@ extension SalesProduct {
         ),
         SalesProduct(
             id: "JW-322",
-            name: "Art Deco Necklace",
-            categoryID: "jewellery",
+            name: "Art Deco Necklace", brand: "Van Cleef & Arpels",
+            categoryID: "necklaces",
             audience: "Women",
             price: "Rs. 2.48L",
             originalPrice: "Rs. 2.70L",
@@ -253,7 +255,7 @@ extension SalesProduct {
         ),
         SalesProduct(
             id: "AC-114",
-            name: "Satin Evening Clutch",
+            name: "Satin Evening Clutch", brand: "Jimmy Choo",
             categoryID: "accessories",
             audience: "Women",
             price: "Rs. 1.58L",
@@ -270,7 +272,7 @@ extension SalesProduct {
         ),
         SalesProduct(
             id: "WT-501",
-            name: "Heritage Chrono",
+            name: "Heritage Chrono", brand: "Omega",
             categoryID: "watches",
             audience: "Men",
             price: "Rs. 4.75L",
@@ -287,3 +289,4 @@ extension SalesProduct {
         )
     ]
 }
+
