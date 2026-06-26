@@ -98,7 +98,8 @@ struct TodayDashboardView: View {
             )
         case .client:
             ClientelingContent(
-                availableClients: clientProfiles,
+                clientProfiles: $clientProfiles,
+                products: products,
                 onStartGuestClient: startGuestSelling,
                 onBuildCuratedCart: startClientSelling,
                 recentlyViewedClients: $recentlyViewedClients
@@ -211,8 +212,6 @@ private struct HeaderBar: View {
     var body: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("9:41")
-                    .font(.headline.weight(.bold))
                 Text("Today")
                     .font(.system(size: 44, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.ink)
@@ -545,7 +544,8 @@ private struct AssociateProfileInfoRow: View {
 
 // client content
 private struct ClientelingContent: View {
-    let availableClients: [ClientProfile]
+    @Binding var clientProfiles: [ClientProfile]
+    let products: [SalesProduct]
     let onStartGuestClient: () -> Void
     let onBuildCuratedCart: (ClientProfile) -> Void
 
@@ -575,8 +575,12 @@ private struct ClientelingContent: View {
 
                         ClientDetailCard(
                             client: selectedClient,
+                            products: products,
                             onBuildCuratedCart: {
                                 onBuildCuratedCart(selectedClient)
+                            },
+                            onUpdateClient: { updatedClient in
+                                updateClientProfile(updatedClient)
                             }
                         )
                             .frame(maxWidth: .infinity)
@@ -611,7 +615,7 @@ private struct ClientelingContent: View {
             return
         }
 
-        guard let match = availableClients.first(where: { $0.matches(searchTerm) }) else {
+        guard let match = clientProfiles.first(where: { $0.matches(searchTerm) }) else {
             missedSearchTerm = searchTerm
             return
         }
@@ -630,13 +634,19 @@ private struct ClientelingContent: View {
         recentlyViewedClients.removeAll { $0.id == client.id }
         recentlyViewedClients.insert(client, at: 0)
     }
+
+    private func updateClientProfile(_ updatedClient: ClientProfile) {
+        clientProfiles.removeAll { $0.id == updatedClient.id }
+        clientProfiles.insert(updatedClient, at: 0)
+        ClientProfileJSONStore.saveProfiles(clientProfiles)
+        rememberRecentlyViewed(updatedClient)
+        selectedClient = updatedClient
+    }
 }
 
 private struct ClientHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("9:41")
-                .font(.headline.weight(.bold))
             Text("Clienteling")
                 .font(.system(size: 44, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.ink)
@@ -799,25 +809,233 @@ private struct ClientResultRow: View {
 
 private struct ClientDetailCard: View {
     let client: ClientProfile
+    let products: [SalesProduct]
     let onBuildCuratedCart: () -> Void
+    let onUpdateClient: (ClientProfile) -> Void
+
+    @State private var activeTaskPanel: ClientTaskPanel?
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
     ]
 
+    private var hasInsightConsent: Bool {
+        client.hasClientInsightConsent
+    }
+
+    private var visibleAttributes: [ClientAttribute] {
+        client.allowsPreferenceVisibility ? client.visiblePreferenceAttributes : []
+    }
+
+    private var wishlistProducts: [SalesProduct] {
+        let wishlistIDs = Set(client.wishlistProductIDs)
+        return products.filter { wishlistIDs.contains($0.id) }
+    }
+
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 16) {
-                    ClientAvatar(initials: client.initials, size: 74)
+            Group {
+                switch activeTaskPanel {
+                case .consentApproval:
+                    ClientConsentApprovalPanel(
+                        client: client,
+                        onBack: {
+                            activeTaskPanel = nil
+                        },
+                        onSave: updateConsent
+                    )
+                case .preferences:
+                    ClientPreferenceEditPanel(
+                        client: client,
+                        onBack: {
+                            activeTaskPanel = nil
+                        },
+                        onSave: updatePreferences
+                    )
+                case nil:
+                    overviewContent
+                }
+            }
+            .animation(.snappy(duration: 0.24), value: activeTaskPanel)
+        }
+    }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(client.tier.uppercased())
-                                .font(.caption.weight(.black))
-                                .tracking(1.2)
-                                .foregroundStyle(Theme.gold)
+    private func updateConsent(
+        preferenceVisibilityAllowed: Bool,
+        purchaseHistoryAllowed: Bool,
+        approvalNote _: String
+    ) {
+        let updatedTasks = client.tasks.map { task in
+            guard task.title.lowercased().contains("consent") else {
+                return task
+            }
+
+            return ClientTask(
+                icon: "checkmark.shield",
+                title: "Client insight consent on",
+                subtitle: consentSubtitle(
+                    preferenceVisibilityAllowed: preferenceVisibilityAllowed,
+                    purchaseHistoryAllowed: purchaseHistoryAllowed
+                )
+            )
+        }
+
+        onUpdateClient(
+            ClientProfile(
+                id: client.id,
+                phone: client.phone,
+                initials: client.initials,
+                name: client.name,
+                tier: client.tier,
+                lifetimePurchaseAmount: client.lifetimePurchaseAmount,
+                boutique: client.boutique,
+                lastVisit: client.lastVisit,
+                status: consentStatus(
+                    preferenceVisibilityAllowed: preferenceVisibilityAllowed,
+                    purchaseHistoryAllowed: purchaseHistoryAllowed
+                ),
+                note: client.note,
+                attributes: client.attributes,
+                tasks: updatedTasks,
+                purchaseHistory: client.purchaseHistory,
+                wishlistProductIDs: client.wishlistProductIDs
+            )
+        )
+    }
+
+    private func consentSubtitle(
+        preferenceVisibilityAllowed: Bool,
+        purchaseHistoryAllowed: Bool
+    ) -> String {
+        switch (preferenceVisibilityAllowed, purchaseHistoryAllowed) {
+        case (true, true):
+            return "Preferences and purchase history visible"
+        case (true, false):
+            return "Preferences visible"
+        case (false, true):
+            return "Purchase history visible"
+        case (false, false):
+            return "Only identity is visible to sales associate"
+        }
+    }
+
+    private func consentStatus(
+        preferenceVisibilityAllowed: Bool,
+        purchaseHistoryAllowed: Bool
+    ) -> String {
+        switch (preferenceVisibilityAllowed, purchaseHistoryAllowed) {
+        case (true, true), (true, false):
+            return "Preferences visible"
+        case (false, true):
+            return "Purchase history visible"
+        case (false, false):
+            return "Profile created - preferences hidden"
+        }
+    }
+
+    private func updatePreferences(
+        preferredStyle: String,
+        budget: String,
+        size: String,
+        materialPreference: String,
+        colorPreference: String,
+        preferenceNote: String
+    ) {
+        let preferenceAttributes = makePreferenceAttributes(
+            preferredStyle: preferredStyle,
+            budget: budget,
+            size: size,
+            materialPreference: materialPreference,
+            colorPreference: colorPreference
+        )
+
+        let replacedTitles = Set(["Size", "Style", "Budget", "Preference", "Color"])
+        let retainedAttributes = client.attributes.filter { !replacedTitles.contains($0.title) }
+        let note = preferenceNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = preferenceAttributes.map(\.value).joined(separator: ", ")
+        let updatedTasks = client.tasks.map { task in
+            guard task.title.lowercased().contains("preference") && !task.title.lowercased().contains("consent") else {
+                return task
+            }
+
+            return ClientTask(
+                icon: "heart.fill",
+                title: "Preferences saved",
+                subtitle: summary.isEmpty ? "Preference details updated" : summary
+            )
+        }
+
+        onUpdateClient(
+            ClientProfile(
+                id: client.id,
+                phone: client.phone,
+                initials: client.initials,
+                name: client.name,
+                tier: client.tier,
+                lifetimePurchaseAmount: client.lifetimePurchaseAmount,
+                boutique: client.boutique,
+                lastVisit: client.lastVisit,
+                status: client.status,
+                note: note,
+                attributes: retainedAttributes + preferenceAttributes,
+                tasks: updatedTasks,
+                purchaseHistory: client.purchaseHistory,
+                wishlistProductIDs: client.wishlistProductIDs
+            )
+        )
+    }
+
+    private func makePreferenceAttributes(
+        preferredStyle: String,
+        budget: String,
+        size: String,
+        materialPreference: String,
+        colorPreference: String
+    ) -> [ClientAttribute] {
+        var attributes: [ClientAttribute] = []
+        appendAttribute("Size", value: size, to: &attributes)
+        appendAttribute("Style", value: preferredStyle, to: &attributes)
+        appendAttribute("Budget", value: budget, to: &attributes)
+        appendAttribute("Preference", value: materialPreference, to: &attributes)
+        appendAttribute("Color", value: colorPreference, to: &attributes)
+        return attributes
+    }
+
+    private func appendAttribute(_ title: String, value: String, to attributes: inout [ClientAttribute]) {
+        let resolvedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resolvedValue.isEmpty && resolvedValue != "N/A" else { return }
+        attributes.append(ClientAttribute(title: title, value: resolvedValue))
+    }
+
+    private var visibleClientNote: String? {
+        let note = client.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { return nil }
+
+        let generatedNotes = [
+            "New client profile created. Preferences pending."
+        ]
+        let isGeneratedPreferenceNote = note.lowercased().hasPrefix("new client prefers ")
+
+        guard !generatedNotes.contains(note) && !isGeneratedPreferenceNote else {
+            return nil
+        }
+
+        return note
+    }
+
+    private var overviewContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 16) {
+                ClientAvatar(initials: client.initials, size: 74)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(client.tier.uppercased())
+                            .font(.caption.weight(.black))
+                            .tracking(1.2)
+                            .foregroundStyle(Theme.gold)
+                        if client.tier != "Normal" {
                             Text("VIP")
                                 .font(.caption.weight(.black))
                                 .foregroundStyle(Theme.gold)
@@ -825,75 +1043,167 @@ private struct ClientDetailCard: View {
                                 .padding(.vertical, 6)
                                 .background(Theme.selected, in: Capsule())
                         }
-
-                        Text(client.name)
-                            .font(.system(size: 36, weight: .black, design: .rounded))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.78)
-
-                        Text("\(client.boutique) • last visit \(client.lastVisit) • \(client.status.lowercased())")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.muted)
-                            .lineLimit(2)
                     }
 
-                    Spacer()
-                }
-                .padding(18)
-                .background(Theme.selected.opacity(0.72), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    Text(client.name)
+                        .font(.system(size: 36, weight: .black, design: .rounded))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.78)
 
+                    Text("\(client.boutique) • last visit \(client.lastVisit) • \(client.status.lowercased())")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+            .padding(18)
+            .background(Theme.selected.opacity(0.72), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+
+            ClientLoyaltySummary(client: client)
+
+            if !visibleAttributes.isEmpty {
                 LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(client.attributes) { attribute in
+                    ForEach(visibleAttributes) { attribute in
                         ClientAttributeTile(attribute: attribute)
                     }
                 }
+            } else if !hasInsightConsent {
+                ClientRestrictedInsightNotice()
+            }
 
+            if hasInsightConsent, let visibleClientNote {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Client Note")
                         .font(.headline.weight(.black))
-                    Text(client.note)
+                    Text(visibleClientNote)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.muted)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
                 .background(Theme.selected.opacity(0.65), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Consent & Tasks")
-                            .font(.title3.weight(.black))
-                        Spacer()
-                        Text("Protected")
-                            .font(.caption.weight(.black))
-                            .foregroundStyle(Theme.gold)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 7)
-                            .background(Theme.selected, in: Capsule())
-                    }
-
-                    ForEach(client.tasks) { task in
-                        ClientTaskRow(task: task)
-                    }
-
-                    Button(action: onBuildCuratedCart) {
-                        Label("Build Curated Cart", systemImage: "bag")
-                            .font(.headline.weight(.black))
-                            .frame(maxWidth: .infinity, minHeight: 54)
-                            .foregroundStyle(.white)
-                            .background(Theme.goldGradient, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(16)
-                .background(.white.opacity(0.56), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Theme.line.opacity(0.55), lineWidth: 1)
-                )
             }
+
+            if client.allowsPurchaseHistoryVisibility {
+                ClientPurchaseHistorySection(purchases: client.purchaseHistory)
+                ClientWishlistInsightSection(products: wishlistProducts)
+            }
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Consent & Tasks")
+                        .font(.title3.weight(.black))
+                    Spacer()
+                    Text("Protected")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                ForEach(client.tasks) { task in
+                    ClientTaskRow(
+                        task: task,
+                        isActionable: taskPanel(for: task) != nil
+                    ) {
+                        activeTaskPanel = taskPanel(for: task)
+                    }
+                }
+
+                Button(action: onBuildCuratedCart) {
+                    Label("Build Curated Cart", systemImage: "bag")
+                        .font(.headline.weight(.black))
+                        .frame(maxWidth: .infinity, minHeight: 54)
+                        .foregroundStyle(.white)
+                        .background(Theme.goldGradient, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(16)
+            .background(.white.opacity(0.56), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Theme.line.opacity(0.55), lineWidth: 1)
+            )
         }
+    }
+
+    private func taskPanel(for task: ClientTask) -> ClientTaskPanel? {
+        let title = task.title.lowercased()
+
+        if title.contains("consent") {
+            return .consentApproval
+        }
+
+        if title.contains("preference") {
+            return .preferences
+        }
+
+        return nil
+    }
+}
+
+private enum ClientTaskPanel: Equatable {
+    case consentApproval
+    case preferences
+}
+
+private struct ClientLoyaltySummary: View {
+    let client: ClientProfile
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ClientLoyaltyTile(title: "Tier", value: client.tier, icon: "crown")
+            ClientLoyaltyTile(title: "Reward Points", value: client.rewardPointsText, icon: "sparkles")
+            ClientLoyaltyTile(title: "Lifetime Purchase", value: client.lifetimePurchaseText, icon: "creditcard")
+        }
+    }
+}
+
+private struct ClientLoyaltyTile: View {
+    let title: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 42, height: 42)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title.uppercased())
+                    .font(.caption.weight(.black))
+                    .tracking(1.1)
+                    .foregroundStyle(Theme.muted)
+                Text(value)
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
+        .background(.white.opacity(0.60), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
     }
 }
 
@@ -922,32 +1232,517 @@ private struct ClientAttributeTile: View {
     }
 }
 
-private struct ClientTaskRow: View {
-    let task: ClientTask
+private struct ClientRestrictedInsightNotice: View {
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Other preferences are hidden until clients consent")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                Text("Purchase history, wishlist, style notes, and detailed preferences will appear after consent is captured.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+            }
+        } icon: {
+            Image(systemName: "eye.slash")
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 44, height: 44)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct ClientPurchaseHistorySection: View {
+    let purchases: [ClientPurchase]
 
     var body: some View {
-        HStack(spacing: 13) {
-            Image(systemName: task.icon)
-                .font(.headline.weight(.semibold))
+        if !purchases.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Purchase History")
+                        .font(.title3.weight(.black))
+                    Spacer()
+                    Text("\(purchases.count) items")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                ForEach(purchases) { purchase in
+                    ClientPurchaseRow(purchase: purchase)
+                }
+            }
+            .padding(16)
+            .background(.white.opacity(0.56), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+            )
+        }
+    }
+}
+
+private struct ClientPurchaseRow: View {
+    let purchase: ClientPurchase
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "bag.badge.checkmark")
+                .font(.headline.weight(.black))
                 .foregroundStyle(Theme.gold)
                 .frame(width: 42, height: 42)
                 .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.title)
+                Text(purchase.productName)
                     .font(.headline.weight(.bold))
                     .foregroundStyle(Theme.ink)
-                Text(task.subtitle)
+                Text("\(purchase.purchasedOn) • \(purchase.boutique)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.muted)
             }
 
             Spacer()
 
-            Image(systemName: "chevron.right")
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(Theme.muted.opacity(0.72))
+            Text(purchase.price)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
         }
+        .padding(12)
+        .background(.white.opacity(0.54), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+private struct ClientWishlistInsightSection: View {
+    let products: [SalesProduct]
+
+    var body: some View {
+        if !products.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Wishlist")
+                        .font(.title3.weight(.black))
+                    Spacer()
+                    Text("\(products.count) saved")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 7)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                ScrollView(.horizontal) {
+                    HStack(spacing: 12) {
+                        ForEach(products) { product in
+                            ClientWishlistProductCard(product: product)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .padding(16)
+            .background(.white.opacity(0.56), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+            )
+        }
+    }
+}
+
+private struct ClientWishlistProductCard: View {
+    let product: SalesProduct
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ProductImageView(imageName: product.imageName)
+                .frame(width: 126, height: 92)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+            Text(product.name)
+                .font(.subheadline.weight(.black))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+
+            Text(product.price)
+                .font(.caption.weight(.black))
+                .foregroundStyle(Theme.muted)
+        }
+        .frame(width: 140, alignment: .leading)
+        .padding(10)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct ClientTaskRow: View {
+    let task: ClientTask
+    let isActionable: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 13) {
+                Image(systemName: task.icon)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 42, height: 42)
+                    .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(task.title)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(Theme.ink)
+                    Text(task.subtitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(isActionable ? Theme.muted.opacity(0.72) : Theme.muted.opacity(0.24))
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isActionable)
+        .accessibilityLabel(task.title)
+    }
+}
+
+private struct ClientPanelBackButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
+                .frame(width: 44, height: 44)
+                .background(.white.opacity(0.72), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
+    }
+}
+
+private struct ClientConsentApprovalPanel: View {
+    let client: ClientProfile
+    let onBack: () -> Void
+    let onSave: (Bool, Bool, String) -> Void
+
+    @State private var preferenceVisibilityAllowed = false
+    @State private var purchaseHistoryAllowed = false
+    @State private var isSaved = false
+
+    init(
+        client: ClientProfile,
+        onBack: @escaping () -> Void,
+        onSave: @escaping (Bool, Bool, String) -> Void
+    ) {
+        self.client = client
+        self.onBack = onBack
+        self.onSave = onSave
+        _preferenceVisibilityAllowed = State(initialValue: client.hasClientInsightConsent)
+        _purchaseHistoryAllowed = State(initialValue: client.hasClientInsightConsent)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                ClientPanelBackButton(action: onBack)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Preference Consent")
+                        .font(.title2.weight(.black))
+                        .foregroundStyle(Theme.ink)
+                    Text("Take approval before showing preferences and purchase history to Sales Associate.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+
+                Spacer()
+
+                Text(isSaved ? "Saved" : "Pending")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Theme.selected, in: Capsule())
+            }
+
+            HStack(spacing: 14) {
+                ClientAvatar(initials: client.initials, size: 58)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(client.name)
+                        .font(.title3.weight(.black))
+                    Text("\(client.phone) • \(client.boutique)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+
+                Spacer()
+            }
+            .padding(16)
+            .background(Theme.selected.opacity(0.65), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+            VStack(spacing: 12) {
+                ConsentToggleRow(
+                    title: "Client allows preference visibility",
+                    subtitle: "Style, size, material and budget can be visible in clienteling.",
+                    icon: "eye",
+                    isOn: $preferenceVisibilityAllowed
+                )
+
+                ConsentToggleRow(
+                    title: "Client allows purchase history visibility",
+                    subtitle: "Past purchases can be used for recommendations and follow-up.",
+                    icon: "bag.badge.checkmark",
+                    isOn: $purchaseHistoryAllowed
+                )
+            }
+
+            Button {
+                onSave(preferenceVisibilityAllowed, purchaseHistoryAllowed, "")
+                isSaved = true
+            } label: {
+                Label(isSaved ? "Consent Captured" : "Capture Consent", systemImage: isSaved ? "checkmark.seal.fill" : "checkmark.shield")
+                    .font(.headline.weight(.black))
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .foregroundStyle(.white)
+                    .background(Theme.goldGradient, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!preferenceVisibilityAllowed && !purchaseHistoryAllowed)
+            .opacity((preferenceVisibilityAllowed || purchaseHistoryAllowed) ? 1 : 0.55)
+        }
+    }
+}
+
+private struct ConsentToggleRow: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 44, height: 44)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                Text(subtitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .tint(Theme.gold)
+        }
+        .padding(14)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct ClientPreferenceEditPanel: View {
+    let client: ClientProfile
+    let onBack: () -> Void
+    let onSave: (String, String, String, String, String, String) -> Void
+
+    @State private var preferredStyle: String
+    @State private var budget: String
+    @State private var size: String
+    @State private var materialPreference: String
+    @State private var colorPreference: String
+    @State private var preferenceNote: String
+    @State private var savedSummary: String?
+
+    private let styles = ["N/A", "Minimal", "Statement", "Classic", "Bridal", "Evening"]
+    private let budgets = ["N/A", "Rs. 50K+", "Rs. 1L+", "Rs. 2L+", "Rs. 5L+"]
+    private let sizes = ["N/A", "EU 36", "EU 38", "EU 40", "One size"]
+    private let materials = ["N/A", "Gold hardware", "Silver hardware", "Pearl", "Diamond", "Leather"]
+
+    init(
+        client: ClientProfile,
+        onBack: @escaping () -> Void,
+        onSave: @escaping (String, String, String, String, String, String) -> Void
+    ) {
+        self.client = client
+        self.onBack = onBack
+        self.onSave = onSave
+        _preferredStyle = State(initialValue: Self.savedAttribute("Style", in: client))
+        _budget = State(initialValue: Self.savedAttribute("Budget", in: client))
+        _size = State(initialValue: Self.savedAttribute("Size", in: client))
+        _materialPreference = State(initialValue: Self.savedAttribute("Preference", in: client))
+        _colorPreference = State(initialValue: Self.savedAttribute("Color", in: client, fallback: ""))
+        _preferenceNote = State(initialValue: Self.savedNote(in: client))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                ClientPanelBackButton(action: onBack)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Add Preferences")
+                        .font(.title2.weight(.black))
+                        .foregroundStyle(Theme.ink)
+                    Text("Capture optional preferences only when client shares them.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+
+                Spacer()
+
+                Text(client.name)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Theme.selected, in: Capsule())
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                ProfileDropdown(title: "Style", options: styles, selection: $preferredStyle)
+                ProfileDropdown(title: "Budget", options: budgets, selection: $budget)
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                ProfileDropdown(title: "Size", options: sizes, selection: $size)
+                ProfileDropdown(title: "Material", options: materials, selection: $materialPreference)
+            }
+
+            ProfileTextField(title: "Color Preference", placeholder: "champagne, black, emerald...", text: $colorPreference)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Preference Note")
+                    .font(.headline.weight(.black))
+                TextEditor(text: $preferenceNote)
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 130)
+                    .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                    )
+                    .overlay(alignment: .topLeading) {
+                        if preferenceNote.isEmpty {
+                            Text("Add occasion, product interest, dislikes, or follow-up preference...")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.muted.opacity(0.66))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 18)
+                        }
+                    }
+            }
+
+            if let savedSummary {
+                Label(savedSummary, systemImage: "checkmark.seal")
+                    .font(.subheadline.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.selected.opacity(0.62), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+
+            Button {
+                let summary = preferenceSummary
+                onSave(preferredStyle, budget, size, materialPreference, colorPreference, preferenceNote)
+                savedSummary = summary
+            } label: {
+                Label("Save Preferences", systemImage: "heart.text.square")
+                    .font(.headline.weight(.black))
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .foregroundStyle(.white)
+                    .background(Theme.goldGradient, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(preferenceSummary == "No preference selected")
+            .opacity(preferenceSummary == "No preference selected" ? 0.55 : 1)
+        }
+    }
+
+    private var preferenceSummary: String {
+        let values = [
+            preferredStyle,
+            budget,
+            size,
+            materialPreference,
+            colorPreference,
+            preferenceNote
+        ]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "N/A" }
+
+        guard !values.isEmpty else {
+            return "No preference selected"
+        }
+
+        return "Saved: \(values.prefix(3).joined(separator: ", "))"
+    }
+
+    private static func savedAttribute(_ title: String, in client: ClientProfile, fallback: String = "N/A") -> String {
+        guard let rawValue = client.attributes.first(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame })?.value else {
+            return fallback
+        }
+
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            !value.isEmpty,
+            value != "N/A",
+            value != "Hidden until consent"
+        else {
+            return fallback
+        }
+
+        return value
+    }
+
+    private static func savedNote(in client: ClientProfile) -> String {
+        let note = client.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty,
+              note != "New client profile created. Preferences pending.",
+              !note.lowercased().hasPrefix("new client prefers ")
+        else {
+            return ""
+        }
+
+        return note
     }
 }
 
@@ -975,6 +1770,13 @@ private struct SellContent: View {
     @State private var selectedCategoryID: String
     @State private var selectedProduct: SalesProduct?
     @State private var returnPanelAfterProfile: SellingSessionPanel = .wishlist
+    @State private var isFilterPresented = false
+    @State private var audienceFilter = SellAudienceFilter.all
+    @State private var availabilityFilter = SellAvailabilityFilter.all
+    @State private var priceFilter = SellPriceFilter.all
+    @State private var showsDiscountedOnly = false
+    @State private var expandedCategoryIDs: Set<String> = []
+    @State private var isTopSuggestionsExpanded = false
 
     init(
         categories: [ProductCategory],
@@ -995,19 +1797,26 @@ private struct SellContent: View {
         categories.first(where: { $0.id == selectedCategoryID })?.title ?? "Products"
     }
 
+    private var browserTitle: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? activeCategoryTitle : "Search Results"
+    }
+
     private var filteredProducts: [SalesProduct] {
         let searchTerm = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let baseProducts: [SalesProduct]
         if !searchTerm.isEmpty {
-            return products.filter { $0.matches(searchTerm) }
+            baseProducts = products.filter { $0.matches(searchTerm) }
+        } else {
+            baseProducts = products.filter { $0.categoryID == selectedCategoryID }
         }
 
-        return products.filter { $0.categoryID == selectedCategoryID }
+        return applyActiveFilters(to: baseProducts)
     }
 
     private var suggestedProducts: [SalesProduct] {
-        let categoryMatches = products.filter { $0.categoryID == selectedCategoryID }
-        return Array((categoryMatches.isEmpty ? products : categoryMatches).prefix(5))
+        let categoryMatches = applyActiveFilters(to: products.filter { $0.categoryID == selectedCategoryID })
+        return categoryMatches.isEmpty ? applyActiveFilters(to: products) : categoryMatches
     }
 
     private var wishlistProducts: [SalesProduct] {
@@ -1022,6 +1831,27 @@ private struct SellContent: View {
         session.activePanel == .cart ? "View Cart" : "Wishlist"
     }
 
+    private var isCategoryExpanded: Bool {
+        expandedCategoryIDs.contains(selectedCategoryID)
+    }
+
+    private func applyActiveFilters(to sourceProducts: [SalesProduct]) -> [SalesProduct] {
+        sourceProducts.filter { product in
+            audienceFilter.matches(product)
+                && availabilityFilter.matches(product)
+                && priceFilter.matches(product)
+                && (!showsDiscountedOnly || product.originalPrice != nil)
+        }
+    }
+
+    private func toggleCurrentCategoryViewAll() {
+        if expandedCategoryIDs.contains(selectedCategoryID) {
+            expandedCategoryIDs.remove(selectedCategoryID)
+        } else {
+            expandedCategoryIDs.insert(selectedCategoryID)
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -1032,6 +1862,9 @@ private struct SellContent: View {
                         query: $query,
                         showsClientActions: session.hasActiveClient,
                         cartCount: session.cartItemCount,
+                        onOpenFilters: {
+                            isFilterPresented = true
+                        },
                         onOpenWishlist: {
                             selectedProduct = nil
                             session.activePanel = .wishlist
@@ -1049,6 +1882,7 @@ private struct SellContent: View {
                         selectedCategoryID = category.id
                         selectedProduct = nil
                         query = ""
+                        isTopSuggestionsExpanded = false
                         session.activePanel = nil
                     }
                 }
@@ -1090,6 +1924,9 @@ private struct SellContent: View {
                 } else if session.activePanel == .createProfile {
                     CreateClientProfilePanel(
                         guestID: session.guestID ?? "Guest",
+                        onBack: {
+                            session.activePanel = returnPanelAfterProfile
+                        },
                         onSave: { profile in
                             session.createdClient = profile
                             session.activePanel = returnPanelAfterProfile
@@ -1099,16 +1936,24 @@ private struct SellContent: View {
                 } else if let selectedProduct {
                     HStack(alignment: .top, spacing: 18) {
                         SellProductBrowser(
-                            title: activeCategoryTitle,
+                            title: browserTitle,
                             products: filteredProducts,
                             suggestedProducts: suggestedProducts,
                             selectedProduct: selectedProduct,
                             allowsWishlist: session.hasActiveClient,
+                            isExpanded: isCategoryExpanded,
+                            isTopSuggestionsExpanded: isTopSuggestionsExpanded,
                             isWishlisted: { product in
                                 session.isWishlisted(product)
                             },
                             onToggleWishlist: { product in
                                 session.toggleWishlist(product)
+                            },
+                            onToggleTopSuggestions: {
+                                isTopSuggestionsExpanded.toggle()
+                            },
+                            onToggleViewAll: {
+                                toggleCurrentCategoryViewAll()
                             }
                         ) { product in
                             self.selectedProduct = product
@@ -1135,16 +1980,24 @@ private struct SellContent: View {
                     }
                 } else {
                     SellProductBrowser(
-                        title: activeCategoryTitle,
+                        title: browserTitle,
                         products: filteredProducts,
                         suggestedProducts: suggestedProducts,
                         selectedProduct: nil,
                         allowsWishlist: session.hasActiveClient,
+                        isExpanded: isCategoryExpanded,
+                        isTopSuggestionsExpanded: isTopSuggestionsExpanded,
                         isWishlisted: { product in
                             session.isWishlisted(product)
                         },
                         onToggleWishlist: { product in
                             session.toggleWishlist(product)
+                        },
+                        onToggleTopSuggestions: {
+                            isTopSuggestionsExpanded.toggle()
+                        },
+                        onToggleViewAll: {
+                            toggleCurrentCategoryViewAll()
                         }
                     ) { product in
                         selectedProduct = product
@@ -1157,6 +2010,16 @@ private struct SellContent: View {
         }
         .scrollIndicators(.hidden)
         .animation(.snappy(duration: 0.28), value: selectedProduct)
+        .sheet(isPresented: $isFilterPresented) {
+            SellFilterPanel(
+                audienceFilter: $audienceFilter,
+                availabilityFilter: $availabilityFilter,
+                priceFilter: $priceFilter,
+                showsDiscountedOnly: $showsDiscountedOnly
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     @ViewBuilder
@@ -1230,8 +2093,6 @@ private struct SellHeader: View {
     var body: some View {
         HStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("9:41")
-                    .font(.headline.weight(.bold))
                 Text("Sell")
                     .font(.system(size: 44, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.ink)
@@ -1261,6 +2122,7 @@ private struct SellSearchRow: View {
     @Binding var query: String
     let showsClientActions: Bool
     let cartCount: Int
+    let onOpenFilters: () -> Void
     let onOpenWishlist: () -> Void
     let onOpenCart: () -> Void
 
@@ -1284,7 +2146,7 @@ private struct SellSearchRow: View {
                     .stroke(Theme.line.opacity(0.55), lineWidth: 1)
             )
 
-            ToolbarPillButton(title: "Filters", icon: "slider.horizontal.3")
+            ToolbarPillButton(title: "Filters", icon: "slider.horizontal.3", action: onOpenFilters)
             if showsClientActions {
                 ToolbarPillButton(
                     title: "Wishlist",
@@ -1367,18 +2229,296 @@ private struct CategoryStrip: View {
     }
 }
 
+private enum SellAudienceFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case women = "Women"
+    case men = "Men"
+
+    var id: String { rawValue }
+
+    func matches(_ product: SalesProduct) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .women, .men:
+            return product.audience.localizedCaseInsensitiveContains(rawValue)
+        }
+    }
+}
+
+private enum SellAvailabilityFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case inBoutique = "In Boutique"
+    case transfer = "Transfer"
+    case limited = "Limited"
+
+    var id: String { rawValue }
+
+    func matches(_ product: SalesProduct) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .inBoutique:
+            return product.availability.localizedCaseInsensitiveContains("boutique")
+        case .transfer:
+            return product.availability.localizedCaseInsensitiveContains("transfer")
+                || product.stockNote.localizedCaseInsensitiveContains("transfer")
+                || product.availability.localizedCaseInsensitiveContains("store manager")
+        case .limited:
+            return product.badge?.localizedCaseInsensitiveContains("limited") == true
+                || product.stockNote.localizedCaseInsensitiveContains("limited")
+        }
+    }
+}
+
+private enum SellPriceFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case underOnePointFive = "Under Rs. 1.5L"
+    case onePointFiveToThree = "Rs. 1.5L - 3L"
+    case aboveThree = "Above Rs. 3L"
+
+    var id: String { rawValue }
+
+    func matches(_ product: SalesProduct) -> Bool {
+        guard let price = product.priceInLakhs else {
+            return self == .all
+        }
+
+        switch self {
+        case .all:
+            return true
+        case .underOnePointFive:
+            return price < 1.5
+        case .onePointFiveToThree:
+            return price >= 1.5 && price <= 3
+        case .aboveThree:
+            return price > 3
+        }
+    }
+}
+
+private extension SalesProduct {
+    var priceInLakhs: Double? {
+        let normalized = price
+            .replacingOccurrences(of: "Rs.", with: "")
+            .replacingOccurrences(of: "₹", with: "")
+            .replacingOccurrences(of: "L", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return Double(normalized)
+    }
+}
+
+private struct SellFilterPanel: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var audienceFilter: SellAudienceFilter
+    @Binding var availabilityFilter: SellAvailabilityFilter
+    @Binding var priceFilter: SellPriceFilter
+    @Binding var showsDiscountedOnly: Bool
+
+    var body: some View {
+        ZStack {
+            Theme.background
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Filters")
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(Theme.ink)
+                        Text("Refine the visible catalogue for this client conversation.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        resetFilters()
+                    } label: {
+                        Text("Reset")
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 16)
+                            .frame(height: 44)
+                            .background(Theme.selected, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                            .frame(width: 44, height: 44)
+                            .background(.white.opacity(0.72), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                HStack(alignment: .top, spacing: 16) {
+                    FilterSection(title: "Audience") {
+                        FilterChipWrap {
+                            ForEach(SellAudienceFilter.allCases) { option in
+                                SellFilterChip(
+                                    title: option.rawValue,
+                                    isSelected: audienceFilter == option
+                                ) {
+                                    audienceFilter = option
+                                }
+                            }
+                        }
+                    }
+
+                    FilterSection(title: "Availability") {
+                        FilterChipWrap {
+                            ForEach(SellAvailabilityFilter.allCases) { option in
+                                SellFilterChip(
+                                    title: option.rawValue,
+                                    isSelected: availabilityFilter == option
+                                ) {
+                                    availabilityFilter = option
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 16) {
+                    FilterSection(title: "Price Range") {
+                        FilterChipWrap {
+                            ForEach(SellPriceFilter.allCases) { option in
+                                SellFilterChip(
+                                    title: option.rawValue,
+                                    isSelected: priceFilter == option
+                                ) {
+                                    priceFilter = option
+                                }
+                            }
+                        }
+                    }
+
+                    FilterSection(title: "Offers") {
+                        Toggle(isOn: $showsDiscountedOnly) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Discounted pieces only")
+                                    .font(.headline.weight(.black))
+                                    .foregroundStyle(Theme.ink)
+                                Text("Show products that have a listed original price.")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Theme.muted)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .tint(Theme.gold)
+                        .padding(16)
+                        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    dismiss()
+                } label: {
+                    Label("Apply Filters", systemImage: "checkmark")
+                        .font(.headline.weight(.black))
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .foregroundStyle(.white)
+                        .background(Theme.goldGradient, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(28)
+        }
+    }
+
+    private func resetFilters() {
+        audienceFilter = .all
+        availabilityFilter = .all
+        priceFilter = .all
+        showsDiscountedOnly = false
+    }
+}
+
+private struct FilterSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(title)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+private struct FilterChipWrap<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 10) {
+                content
+            }
+            .padding(.vertical, 1)
+        }
+        .scrollIndicators(.hidden)
+    }
+}
+
+private struct SellFilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.black))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .padding(.horizontal, 14)
+                .frame(height: 42)
+                .foregroundStyle(isSelected ? .white : Theme.ink)
+                .background(
+                    isSelected ? AnyShapeStyle(Theme.goldGradient) : AnyShapeStyle(.white.opacity(0.68)),
+                    in: Capsule()
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(Theme.line.opacity(0.55), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct SellProductBrowser: View {
     let title: String
     let products: [SalesProduct]
     let suggestedProducts: [SalesProduct]
     let selectedProduct: SalesProduct?
     let allowsWishlist: Bool
+    let isExpanded: Bool
+    let isTopSuggestionsExpanded: Bool
     let isWishlisted: (SalesProduct) -> Bool
     let onToggleWishlist: (SalesProduct) -> Void
+    let onToggleTopSuggestions: () -> Void
+    let onToggleViewAll: () -> Void
     let onSelect: (SalesProduct) -> Void
 
     private let columns = [
-        GridItem(.adaptive(minimum: 158), spacing: 14)
+        GridItem(.adaptive(minimum: 176), spacing: 14)
     ]
 
     var body: some View {
@@ -1386,8 +2526,10 @@ private struct SellProductBrowser: View {
             SuggestedProductsRow(
                 products: suggestedProducts,
                 allowsWishlist: allowsWishlist,
+                isExpanded: isTopSuggestionsExpanded,
                 isWishlisted: isWishlisted,
                 onToggleWishlist: onToggleWishlist,
+                onToggleViewAll: onToggleTopSuggestions,
                 onSelect: onSelect
             )
 
@@ -1399,11 +2541,17 @@ private struct SellProductBrowser: View {
 
                         Spacer()
 
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.title3.weight(.black))
-                            .foregroundStyle(Theme.ink)
-                            .frame(width: 42, height: 42)
-                            .accessibilityLabel("Filters")
+                        if !products.isEmpty {
+                            Button(action: onToggleViewAll) {
+                                Text(isExpanded ? "Show Less" : "View All")
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(Theme.gold)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 8)
+                                    .background(Theme.selected, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
 
                     if products.isEmpty {
@@ -1418,7 +2566,7 @@ private struct SellProductBrowser: View {
                                 .foregroundStyle(Theme.muted)
                         }
                         .frame(maxWidth: .infinity, minHeight: 220)
-                    } else {
+                    } else if isExpanded {
                         LazyVGrid(columns: columns, spacing: 14) {
                             ForEach(products) { product in
                                 ProductGridCard(
@@ -1432,8 +2580,29 @@ private struct SellProductBrowser: View {
                                 ) {
                                     onSelect(product)
                                 }
+                                .frame(height: 288)
                             }
                         }
+                    } else {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 14) {
+                                ForEach(Array(products.prefix(10))) { product in
+                                    ProductGridCard(
+                                        product: product,
+                                        isSelected: selectedProduct == product,
+                                        allowsWishlist: allowsWishlist,
+                                        isWishlisted: isWishlisted(product),
+                                        onToggleWishlist: {
+                                            onToggleWishlist(product)
+                                        }
+                                    ) {
+                                        onSelect(product)
+                                    }
+                                    .frame(width: 176, height: 288)
+                                }
+                            }
+                        }
+                        .scrollIndicators(.hidden)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1445,9 +2614,20 @@ private struct SellProductBrowser: View {
 private struct SuggestedProductsRow: View {
     let products: [SalesProduct]
     let allowsWishlist: Bool
+    let isExpanded: Bool
     let isWishlisted: (SalesProduct) -> Bool
     let onToggleWishlist: (SalesProduct) -> Void
+    let onToggleViewAll: () -> Void
     let onSelect: (SalesProduct) -> Void
+
+    private let visibleLimit = 10
+    private let columns = [
+        GridItem(.adaptive(minimum: 170), spacing: 12)
+    ]
+
+    private var visibleProducts: [SalesProduct] {
+        isExpanded ? products : Array(products.prefix(visibleLimit))
+    }
 
     var body: some View {
         Card {
@@ -1456,21 +2636,23 @@ private struct SuggestedProductsRow: View {
                     Text("Top Suggestions")
                         .font(.title2.weight(.black))
                     Spacer()
-                    Button {
-                    } label: {
-                        Text("View All")
-                            .font(.caption.weight(.black))
-                            .foregroundStyle(Theme.gold)
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 8)
-                            .background(Theme.selected, in: Capsule())
+
+                    if products.count > visibleLimit {
+                        Button(action: onToggleViewAll) {
+                            Text(isExpanded ? "Show Less" : "View All")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(Theme.gold)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 8)
+                                .background(Theme.selected, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
 
-                ScrollView(.horizontal) {
-                    HStack(spacing: 12) {
-                        ForEach(products) { product in
+                if isExpanded {
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(visibleProducts) { product in
                             SuggestedProductCard(
                                 product: product,
                                 allowsWishlist: allowsWishlist,
@@ -1481,11 +2663,29 @@ private struct SuggestedProductsRow: View {
                             ) {
                                 onSelect(product)
                             }
-                            .frame(width: 170)
+                            .frame(height: 202)
                         }
                     }
+                } else {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 12) {
+                            ForEach(visibleProducts) { product in
+                                SuggestedProductCard(
+                                    product: product,
+                                    allowsWishlist: allowsWishlist,
+                                    isWishlisted: isWishlisted(product),
+                                    onToggleWishlist: {
+                                        onToggleWishlist(product)
+                                    }
+                                ) {
+                                    onSelect(product)
+                                }
+                                .frame(width: 170, height: 202)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
                 }
-                .scrollIndicators(.hidden)
             }
         }
     }
@@ -1522,10 +2722,13 @@ private struct SuggestedProductCard: View {
                 .font(.subheadline.weight(.black))
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
+                .frame(height: 18, alignment: .leading)
 
             Text(product.price)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(Theme.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
         }
         .padding(10)
         .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1571,9 +2774,11 @@ private struct ProductGridCard: View {
                         .font(.headline.weight(.black))
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.78)
                     Text("\(product.audience) • \(product.id)")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
@@ -1583,6 +2788,8 @@ private struct ProductGridCard: View {
                 Text(product.price)
                     .font(.subheadline.weight(.black))
                     .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
 
                 Spacer()
 
@@ -1590,6 +2797,7 @@ private struct ProductGridCard: View {
                     Text(badge)
                         .font(.caption2.weight(.black))
                         .foregroundStyle(Theme.gold)
+                        .lineLimit(1)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
                         .background(Theme.selected, in: Capsule())
@@ -1597,6 +2805,7 @@ private struct ProductGridCard: View {
             }
         }
         .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 288, maxHeight: 288, alignment: .topLeading)
         .background(isSelected ? Theme.selected.opacity(0.82) : .white.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -1930,6 +3139,7 @@ private struct SellingCollectionRow: View {
 
 private struct CreateClientProfilePanel: View {
     let guestID: String
+    let onBack: () -> Void
     let onSave: (ClientProfile) -> Void
 
     @State private var fullName = ""
@@ -1957,7 +3167,9 @@ private struct CreateClientProfilePanel: View {
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .top, spacing: 14) {
+                    ClientPanelBackButton(action: onBack)
+
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Create Client Profile")
                             .font(.title2.weight(.black))
@@ -2055,9 +3267,7 @@ private struct CreateClientProfilePanel: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0 != "N/A" }
         let preferenceSummary = capturedPreferences.isEmpty ? "No preferences captured" : capturedPreferences.joined(separator: ", ")
-        let resolvedNote = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? (capturedPreferences.isEmpty ? "New client profile created. Preferences pending." : "New client prefers \(preferenceSummary.lowercased()).")
-            : notes
+        let resolvedNote = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let visibleAttributes = profileAttributes()
 
         return ClientProfile(
@@ -2065,7 +3275,8 @@ private struct CreateClientProfilePanel: View {
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             initials: initials(for: name),
             name: name,
-            tier: "New Client",
+            tier: "Normal",
+            lifetimePurchaseAmount: 0,
             boutique: "Mumbai",
             lastVisit: "Today",
             status: consentAccepted ? "Preferences visible" : "Profile created - preferences hidden",
@@ -2080,7 +3291,7 @@ private struct CreateClientProfilePanel: View {
                 ClientTask(
                     icon: "heart",
                     title: capturedPreferences.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
-                    subtitle: capturedPreferences.isEmpty ? "No optional preference data saved" : (consentAccepted ? preferenceSummary : "Hidden until client allows visibility")
+                    subtitle: capturedPreferences.isEmpty ? "No optional preference data saved" : (consentAccepted ? preferenceSummary : "Other preferences require client consent")
                 )
             ]
         )
@@ -2089,10 +3300,10 @@ private struct CreateClientProfilePanel: View {
     private func profileAttributes() -> [ClientAttribute] {
         var attributes: [ClientAttribute] = []
         appendAttribute("Size", value: size, to: &attributes)
-        appendAttribute("Style", value: consentAccepted ? preferredStyle : "Hidden until consent", sourceValue: preferredStyle, to: &attributes)
+        appendAttribute("Style", value: preferredStyle, to: &attributes)
         appendAttribute("Budget", value: budget, to: &attributes)
-        appendAttribute("Preference", value: consentAccepted ? materialPreference : "Hidden until consent", sourceValue: materialPreference, to: &attributes)
-        appendAttribute("Color", value: consentAccepted ? colorPreference : "Hidden until consent", sourceValue: colorPreference, to: &attributes)
+        appendAttribute("Preference", value: materialPreference, to: &attributes)
+        appendAttribute("Color", value: colorPreference, to: &attributes)
         return attributes
     }
 
@@ -2269,8 +3480,6 @@ private struct PlaceholderTabContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("9:41")
-                .font(.headline.weight(.bold))
             Text(tab.rawValue)
                 .font(.system(size: 44, weight: .bold, design: .rounded))
             Text("This tab will be built after the Today and Client screens are finalized.")

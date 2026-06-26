@@ -80,8 +80,6 @@ struct IssueContent: View {
 private struct IssueHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("9:41")
-                .font(.headline.weight(.bold))
             Text("Issue")
                 .font(.system(size: 44, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.ink)

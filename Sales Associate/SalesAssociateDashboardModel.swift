@@ -73,18 +73,147 @@ struct DailySales: Identifiable {
     let isBest: Bool
 }
 
+enum ClientTier {
+    static func rewardPoints(for lifetimePurchaseAmount: Int) -> Int {
+        max(0, lifetimePurchaseAmount) / 1_000
+    }
+
+    static func displayName(for rewardPoints: Int) -> String {
+        switch rewardPoints {
+        case 50_000...:
+            return "Platinum Tier"
+        case 20_000...49_999:
+            return "Diamond Tier"
+        case 5_000...19_999:
+            return "Gold Tier"
+        case 1_000...4_999:
+            return "Silver Tier"
+        default:
+            return "Normal"
+        }
+    }
+
+    static func minimumLifetimeAmount(for tierName: String?) -> Int {
+        let normalizedTier = tierName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+
+        if normalizedTier.contains("platinum") {
+            return 50_000_000
+        }
+
+        if normalizedTier.contains("diamond") {
+            return 20_000_000
+        }
+
+        if normalizedTier.contains("gold") {
+            return 5_000_000
+        }
+
+        if normalizedTier.contains("silver") {
+            return 1_000_000
+        }
+
+        return 0
+    }
+}
+
 struct ClientProfile: Identifiable, Equatable, Codable {
     let id: String
     let phone: String
     let initials: String
     let name: String
     let tier: String
+    let rewardPoints: Int
+    let lifetimePurchaseAmount: Int
     let boutique: String
     let lastVisit: String
     let status: String
     let note: String
     let attributes: [ClientAttribute]
     let tasks: [ClientTask]
+    let purchaseHistory: [ClientPurchase]
+    let wishlistProductIDs: [String]
+
+    init(
+        id: String,
+        phone: String,
+        initials: String,
+        name: String,
+        tier: String? = nil,
+        rewardPoints: Int? = nil,
+        lifetimePurchaseAmount: Int? = nil,
+        boutique: String,
+        lastVisit: String,
+        status: String,
+        note: String,
+        attributes: [ClientAttribute],
+        tasks: [ClientTask],
+        purchaseHistory: [ClientPurchase] = [],
+        wishlistProductIDs: [String] = []
+    ) {
+        self.id = id
+        self.phone = phone
+        self.initials = initials
+        self.name = name
+        let resolvedLifetimePurchaseAmount = lifetimePurchaseAmount
+            ?? rewardPoints.map { max(0, $0) * 1_000 }
+            ?? ClientTier.minimumLifetimeAmount(for: tier)
+        self.lifetimePurchaseAmount = max(0, resolvedLifetimePurchaseAmount)
+        self.rewardPoints = ClientTier.rewardPoints(for: self.lifetimePurchaseAmount)
+        self.tier = ClientTier.displayName(for: self.rewardPoints)
+        self.boutique = boutique
+        self.lastVisit = lastVisit
+        self.status = status
+        self.note = note
+        self.attributes = attributes
+        self.tasks = tasks
+        self.purchaseHistory = purchaseHistory
+        self.wishlistProductIDs = wishlistProductIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case phone
+        case initials
+        case name
+        case tier
+        case rewardPoints
+        case lifetimePurchaseAmount
+        case boutique
+        case lastVisit
+        case status
+        case note
+        case attributes
+        case tasks
+        case purchaseHistory
+        case wishlistProductIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        phone = try container.decode(String.self, forKey: .phone)
+        initials = try container.decode(String.self, forKey: .initials)
+        name = try container.decode(String.self, forKey: .name)
+        let storedTier = try container.decodeIfPresent(String.self, forKey: .tier)
+        let storedRewardPoints = try container.decodeIfPresent(Int.self, forKey: .rewardPoints)
+        let storedLifetimePurchaseAmount = try container.decodeIfPresent(Int.self, forKey: .lifetimePurchaseAmount)
+        let resolvedLifetimePurchaseAmount = storedLifetimePurchaseAmount
+            ?? storedRewardPoints.map { max(0, $0) * 1_000 }
+            ?? ClientTier.minimumLifetimeAmount(for: storedTier)
+        lifetimePurchaseAmount = max(0, resolvedLifetimePurchaseAmount)
+        rewardPoints = ClientTier.rewardPoints(for: lifetimePurchaseAmount)
+        tier = ClientTier.displayName(for: rewardPoints)
+        boutique = try container.decode(String.self, forKey: .boutique)
+        lastVisit = try container.decode(String.self, forKey: .lastVisit)
+        status = try container.decode(String.self, forKey: .status)
+        note = try container.decode(String.self, forKey: .note)
+        attributes = try container.decode([ClientAttribute].self, forKey: .attributes)
+        tasks = try container.decode([ClientTask].self, forKey: .tasks)
+        purchaseHistory = try container.decodeIfPresent([ClientPurchase].self, forKey: .purchaseHistory) ?? []
+        wishlistProductIDs = try container.decodeIfPresent([String].self, forKey: .wishlistProductIDs) ?? []
+    }
 
     func matches(_ query: String) -> Bool {
         let normalizedQuery = query
@@ -97,6 +226,109 @@ struct ClientProfile: Identifiable, Equatable, Codable {
             || id.lowercased().contains(normalizedQuery)
             || phone.lowercased().contains(normalizedQuery)
     }
+
+    var allowsPreferenceVisibility: Bool {
+        let taskText = tasks
+            .map { "\($0.title) \($0.subtitle)" }
+            .joined(separator: " ")
+            .lowercased()
+        let profileText = "\(status) \(taskText)".lowercased()
+
+        return profileText.contains("consent verified")
+            || profileText.contains("consent on")
+            || profileText.contains("preferences visible")
+            || profileText.contains("profile and purchase history allowed")
+    }
+
+    var allowsPurchaseHistoryVisibility: Bool {
+        let taskText = tasks
+            .map { "\($0.title) \($0.subtitle)" }
+            .joined(separator: " ")
+            .lowercased()
+        let profileText = "\(status) \(taskText)".lowercased()
+
+        return profileText.contains("consent verified")
+            || profileText.contains("purchase history visible")
+            || profileText.contains("purchase history allowed")
+            || profileText.contains("history visible")
+            || profileText.contains("profile and purchase history allowed")
+    }
+
+    var hasClientInsightConsent: Bool {
+        allowsPreferenceVisibility || allowsPurchaseHistoryVisibility
+    }
+
+    var rewardPointsText: String {
+        NumberFormatter.localizedString(from: NSNumber(value: rewardPoints), number: .decimal)
+    }
+
+    var lifetimePurchaseText: String {
+        if lifetimePurchaseAmount >= 10_000_000 {
+            return "Rs. \(formattedAmount(Double(lifetimePurchaseAmount) / 10_000_000))Cr"
+        }
+
+        if lifetimePurchaseAmount >= 100_000 {
+            return "Rs. \(formattedAmount(Double(lifetimePurchaseAmount) / 100_000))L"
+        }
+
+        return "Rs. \(NumberFormatter.localizedString(from: NSNumber(value: lifetimePurchaseAmount), number: .decimal))"
+    }
+
+    var visiblePreferenceAttributes: [ClientAttribute] {
+        attributes.filter { !$0.isConsentPlaceholder }
+    }
+
+    func sanitizedForClienteling(
+        fallbackLifetimePurchaseAmount: Int? = nil,
+        fallbackPurchaseHistory: [ClientPurchase] = [],
+        fallbackWishlistProductIDs: [String] = []
+    ) -> ClientProfile {
+        let cleanedAttributes = attributes.filter { !$0.isConsentPlaceholder }
+        let cleanedTasks = tasks.map { task in
+            guard task.subtitle.lowercased().contains("hidden until") else {
+                return task
+            }
+
+            return ClientTask(
+                icon: task.icon,
+                title: task.title,
+                subtitle: "Other preferences require client consent"
+            )
+        }
+
+        return ClientProfile(
+            id: id,
+            phone: phone,
+            initials: initials,
+            name: name,
+            tier: tier,
+            lifetimePurchaseAmount: fallbackLifetimePurchaseAmount ?? lifetimePurchaseAmount,
+            boutique: boutique,
+            lastVisit: lastVisit,
+            status: status,
+            note: note,
+            attributes: cleanedAttributes,
+            tasks: cleanedTasks,
+            purchaseHistory: purchaseHistory.isEmpty ? fallbackPurchaseHistory : purchaseHistory,
+            wishlistProductIDs: wishlistProductIDs.isEmpty ? fallbackWishlistProductIDs : wishlistProductIDs
+        )
+    }
+
+    private func formattedAmount(_ amount: Double) -> String {
+        let formatted = String(format: "%.2f", amount)
+        return formatted
+            .replacingOccurrences(of: ".00", with: "")
+            .replacingOccurrences(of: #"0$"#, with: "", options: .regularExpression)
+    }
+}
+
+struct ClientPurchase: Identifiable, Equatable, Codable {
+    let id: String
+    let productID: String
+    let productName: String
+    let price: String
+    let purchasedOn: String
+    let boutique: String
 }
 
 struct ClientAttribute: Identifiable, Equatable, Codable {
@@ -105,6 +337,12 @@ struct ClientAttribute: Identifiable, Equatable, Codable {
 
     var id: String {
         "\(title)-\(value)"
+    }
+
+    var isConsentPlaceholder: Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .contains("hidden until consent")
     }
 }
 

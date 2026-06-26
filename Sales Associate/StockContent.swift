@@ -82,8 +82,6 @@ struct StockContent: View {
 private struct StockHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("9:41")
-                .font(.headline.weight(.bold))
             Text("Stock")
                 .font(.system(size: 44, weight: .bold, design: .rounded))
                 .foregroundStyle(Theme.ink)
