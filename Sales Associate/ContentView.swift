@@ -1,13 +1,13 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var loggedInDashboard: SalesAssociateDashboard? = nil
     @State private var selectedTab: SalesAssociateTab = .today
     @State private var navigationMode: SalesNavigationMode = .sidebar
     @State private var recentlyViewedClients: [ClientProfile] = []
     @State private var clientProfiles = ClientProfileJSONStore.loadProfiles()
     @State private var sellingSession = SellingSessionState()
 
-    private let dashboard = SalesAssociateDashboard.sample
     private let categories = ProductCategory.sampleCategories
     private let products = SalesProduct.sampleProducts
     private let stockDashboard = StockDashboard.sample
@@ -15,17 +15,609 @@ struct ContentView: View {
 
 //Dashboard Navigation Controller
     var body: some View {
-        TodayDashboardView(
-            dashboard: dashboard,
-            clientProfiles: $clientProfiles,
-            categories: categories,
-            products: products,
-            stockDashboard: stockDashboard,
-            issueDashboard: issueDashboard,
-            selectedTab: $selectedTab,
-            navigationMode: $navigationMode,
-            recentlyViewedClients: $recentlyViewedClients,
-            sellingSession: $sellingSession
+        if let currentDashboard = loggedInDashboard {
+            TodayDashboardView(
+                dashboard: currentDashboard,
+                clientProfiles: $clientProfiles,
+                categories: categories,
+                products: products,
+                stockDashboard: stockDashboard,
+                issueDashboard: issueDashboard,
+                selectedTab: $selectedTab,
+                navigationMode: $navigationMode,
+                recentlyViewedClients: $recentlyViewedClients,
+                sellingSession: $sellingSession,
+                onLogout: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        loggedInDashboard = nil
+                        selectedTab = .today
+                        sellingSession = SellingSessionState()
+                    }
+                }
+            )
+            .transition(.opacity)
+        } else {
+            LoginView { dashboard in
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    loggedInDashboard = dashboard
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+}
+
+struct LoginView: View {
+    let onLoginSuccess: (SalesAssociateDashboard) -> Void
+
+    @State private var email: String = ""
+    @State private var passcode: String = ""
+    @State private var errorMessage: String? = nil
+    @State private var isPasscodeVisible: Bool = false
+    @State private var isAuthenticating: Bool = false
+
+    // Password change states
+    @State private var changePasswordMode: Bool = false
+    @State private var newPassword: String = ""
+    @State private var confirmNewPassword: String = ""
+    @State private var currentAccessToken: String = ""
+    @State private var tempUserEmail: String = ""
+    @State private var tempUserMetadata: UserMetadata? = nil
+    @State private var isNewPasswordVisible: Bool = false
+    @State private var isConfirmPasswordVisible: Bool = false
+
+    var body: some View {
+        ZStack {
+            // Elegant background matching theme
+            Theme.background
+                .ignoresSafeArea()
+
+            VStack(spacing: 30) {
+                Spacer()
+
+                // Top branding / logo
+                VStack(spacing: 8) {
+                    Text("R S M S")
+                        .font(.system(size: 38, weight: .black, design: .serif))
+                        .tracking(12)
+                        .foregroundStyle(Theme.ink)
+                    
+                    Text("BOUTIQUE PORTAL")
+                        .font(.system(size: 14, weight: .bold))
+                        .tracking(4)
+                        .foregroundStyle(Theme.gold)
+
+                    Rectangle()
+                        .fill(Theme.goldGradient)
+                        .frame(width: 80, height: 2)
+                        .padding(.top, 8)
+                }
+
+                if changePasswordMode {
+                    // Password Change Card
+                    VStack(spacing: 24) {
+                        Text("Secure Your Account")
+                            .font(.system(size: 24, weight: .black, design: .rounded))
+                            .foregroundStyle(Theme.ink)
+
+                        Text("This is your first time logging in. Please set a new security password to access the boutique portal.")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Theme.muted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 10)
+
+                        VStack(alignment: .leading, spacing: 18) {
+                            // New Password Field
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("NEW PASSWORD")
+                                    .font(.caption.weight(.black))
+                                    .tracking(1.1)
+                                    .foregroundStyle(Theme.muted)
+
+                                HStack(spacing: 12) {
+                                    Image(systemName: "lock.fill")
+                                        .font(.headline)
+                                        .foregroundStyle(Theme.gold)
+
+                                    if isNewPasswordVisible {
+                                        TextField("Minimum 6 characters", text: $newPassword)
+                                            .textFieldStyle(.plain)
+                                            .disableAutocorrection(true)
+                                            .textInputAutocapitalization(.never)
+                                    } else {
+                                        SecureField("Minimum 6 characters", text: $newPassword)
+                                            .textFieldStyle(.plain)
+                                            .disableAutocorrection(true)
+                                            .textInputAutocapitalization(.never)
+                                    }
+
+                                    Button {
+                                        isNewPasswordVisible.toggle()
+                                    } label: {
+                                        Image(systemName: isNewPasswordVisible ? "eye.slash" : "eye")
+                                            .foregroundStyle(Theme.muted)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(14)
+                                .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Theme.line.opacity(0.5), lineWidth: 1)
+                                )
+                            }
+
+                            // Confirm Password Field
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("CONFIRM NEW PASSWORD")
+                                    .font(.caption.weight(.black))
+                                    .tracking(1.1)
+                                    .foregroundStyle(Theme.muted)
+
+                                HStack(spacing: 12) {
+                                    Image(systemName: "lock.fill")
+                                        .font(.headline)
+                                        .foregroundStyle(Theme.gold)
+
+                                    if isConfirmPasswordVisible {
+                                        TextField("Confirm password", text: $confirmNewPassword)
+                                            .textFieldStyle(.plain)
+                                            .disableAutocorrection(true)
+                                            .textInputAutocapitalization(.never)
+                                    } else {
+                                        SecureField("Confirm password", text: $confirmNewPassword)
+                                            .textFieldStyle(.plain)
+                                            .disableAutocorrection(true)
+                                            .textInputAutocapitalization(.never)
+                                    }
+
+                                    Button {
+                                        isConfirmPasswordVisible.toggle()
+                                    } label: {
+                                        Image(systemName: isConfirmPasswordVisible ? "eye.slash" : "eye")
+                                            .foregroundStyle(Theme.muted)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(14)
+                                .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Theme.line.opacity(0.5), lineWidth: 1)
+                                )
+                            }
+                        }
+
+                        // Error Message
+                        if let errorMessage {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                Text(errorMessage)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.red)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            .padding(.vertical, 4)
+                            .transition(.opacity)
+                        }
+
+                        // Submit Button
+                        Button(action: handlePasswordChange) {
+                            HStack {
+                                if isAuthenticating {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                } else {
+                                    Text("Update Password & Sign In")
+                                        .font(.headline.weight(.black))
+                                        .tracking(1)
+                                    Image(systemName: "checkmark")
+                                        .font(.headline.weight(.black))
+                                }
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .shadow(color: Theme.gold.opacity(0.3), radius: 10, x: 0, y: 5)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isAuthenticating)
+
+                        // Cancel Button
+                        Button {
+                            withAnimation {
+                                changePasswordMode = false
+                                passcode = ""
+                                newPassword = ""
+                                confirmNewPassword = ""
+                                errorMessage = nil
+                            }
+                        } label: {
+                            Text("Back to Sign In")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(Theme.gold)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(32)
+                    .frame(width: 440)
+                    .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .stroke(Theme.line.opacity(0.6), lineWidth: 1)
+                    )
+                    .shadow(color: Theme.ink.opacity(0.04), radius: 24, x: 0, y: 12)
+                } else {
+                    // Login Card
+                    VStack(spacing: 24) {
+                        Text("Associate Sign In")
+                            .font(.system(size: 24, weight: .black, design: .rounded))
+                            .foregroundStyle(Theme.ink)
+
+                        VStack(alignment: .leading, spacing: 18) {
+                            // Email Field
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("ENTERPRISE EMAIL")
+                                    .font(.caption.weight(.black))
+                                    .tracking(1.1)
+                                    .foregroundStyle(Theme.muted)
+
+                                HStack(spacing: 12) {
+                                    Image(systemName: "envelope")
+                                        .font(.headline)
+                                        .foregroundStyle(Theme.gold)
+                                    
+                                    TextField("name@rsms.in", text: $email)
+                                        .textInputAutocapitalization(.never)
+                                        .keyboardType(.emailAddress)
+                                        .disableAutocorrection(true)
+                                        .textFieldStyle(.plain)
+                                }
+                                .padding(14)
+                                .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Theme.line.opacity(0.5), lineWidth: 1)
+                                )
+                            }
+
+                            // Passcode Field
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("SECURITY PASSCODE")
+                                    .font(.caption.weight(.black))
+                                    .tracking(1.1)
+                                    .foregroundStyle(Theme.muted)
+
+                                HStack(spacing: 12) {
+                                    Image(systemName: "lock")
+                                        .font(.headline)
+                                        .foregroundStyle(Theme.gold)
+
+                                    if isPasscodeVisible {
+                                        TextField("Password or PIN", text: $passcode)
+                                            .textFieldStyle(.plain)
+                                            .disableAutocorrection(true)
+                                            .textInputAutocapitalization(.never)
+                                    } else {
+                                        SecureField("Password or PIN", text: $passcode)
+                                            .textFieldStyle(.plain)
+                                            .disableAutocorrection(true)
+                                            .textInputAutocapitalization(.never)
+                                    }
+
+                                    Button {
+                                        isPasscodeVisible.toggle()
+                                    } label: {
+                                        Image(systemName: isPasscodeVisible ? "eye.slash" : "eye")
+                                            .foregroundStyle(Theme.muted)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(14)
+                                .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Theme.line.opacity(0.5), lineWidth: 1)
+                                )
+                            }
+                        }
+
+                        // Error Message
+                        if let errorMessage {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                Text(errorMessage)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.red)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            .padding(.vertical, 4)
+                            .transition(.opacity)
+                        }
+
+                        // Sign In Button
+                        Button(action: handleLogin) {
+                            HStack {
+                                if isAuthenticating {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                } else {
+                                    Text("Sign In to Account")
+                                        .font(.headline.weight(.black))
+                                        .tracking(1)
+                                    Image(systemName: "arrow.right")
+                                        .font(.headline.weight(.black))
+                                }
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .shadow(color: Theme.gold.opacity(0.3), radius: 10, x: 0, y: 5)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isAuthenticating)
+                    }
+                    .padding(32)
+                    .frame(width: 440)
+                    .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .stroke(Theme.line.opacity(0.6), lineWidth: 1)
+                    )
+                    .shadow(color: Theme.ink.opacity(0.04), radius: 24, x: 0, y: 12)
+                }
+
+                Spacer()
+
+                if !changePasswordMode {
+                    // Demo Accounts / Quick Login Section
+                    VStack(spacing: 16) {
+                        HStack(spacing: 8) {
+                            Rectangle()
+                                .fill(Theme.line)
+                                .frame(height: 1)
+                            
+                            Text("QUICK ACCESS DEMO ACCOUNTS")
+                                .font(.caption.weight(.black))
+                                .tracking(1.5)
+                                .foregroundStyle(Theme.muted)
+                                .padding(.horizontal, 8)
+
+                            Rectangle()
+                                .fill(Theme.line)
+                                .frame(height: 1)
+                        }
+                        .frame(width: 520)
+
+                        HStack(spacing: 16) {
+                            ForEach(SalesAssociateDashboard.samples, id: \.associate.employeeID) { sampleDashboard in
+                                Button {
+                                    quickLogin(with: sampleDashboard)
+                                } label: {
+                                    VStack(spacing: 10) {
+                                        Text(sampleDashboard.associate.initials)
+                                            .font(.headline.weight(.black))
+                                            .foregroundStyle(.white)
+                                            .frame(width: 50, height: 50)
+                                            .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                                        VStack(spacing: 3) {
+                                            Text(sampleDashboard.associate.name)
+                                                .font(.headline.weight(.bold))
+                                                .foregroundStyle(Theme.ink)
+                                                .lineLimit(1)
+                                            
+                                            Text(sampleDashboard.associate.boutique)
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(Theme.muted)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .padding(16)
+                                    .frame(width: 160)
+                                    .background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                            .stroke(Theme.line.opacity(0.55), lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 40)
+                }
+            }
+            .padding(.vertical, 30)
+        }
+    }
+
+    private func handleLogin() {
+        errorMessage = nil
+        let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanPasscode = passcode.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleanEmail.isEmpty else {
+            errorMessage = "Please enter your enterprise email."
+            return
+        }
+
+        guard !cleanPasscode.isEmpty else {
+            errorMessage = "Please enter your password."
+            return
+        }
+
+        isAuthenticating = true
+
+        Task {
+            do {
+                // local check for demo profiles with testing passcode '1234'
+                let demoEmails = SalesAssociateDashboard.samples.map { $0.associate.email.lowercased() }
+                if demoEmails.contains(cleanEmail) && cleanPasscode == "1234" {
+                    try await Task.sleep(nanoseconds: 600_000_000)
+                    let matchedDashboard = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == cleanEmail })!
+                    await MainActor.run {
+                        isAuthenticating = false
+                        onLoginSuccess(matchedDashboard)
+                    }
+                    return
+                }
+
+                // Supabase Auth call
+                let session = try await SupabaseAuthService.shared.login(email: cleanEmail, password: cleanPasscode)
+                
+                await MainActor.run {
+                    isAuthenticating = false
+                    
+                    // Check user_metadata.password_changed to enforce password change on first login
+                    let passwordChanged = session.user.userMetadata?.passwordChanged ?? false
+                    if !passwordChanged {
+                        currentAccessToken = session.accessToken
+                        tempUserEmail = cleanEmail
+                        tempUserMetadata = session.user.userMetadata
+                        withAnimation {
+                            changePasswordMode = true
+                            errorMessage = nil
+                        }
+                    } else {
+                        let dashboard = getDashboard(for: cleanEmail, metadata: session.user.userMetadata)
+                        onLoginSuccess(dashboard)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isAuthenticating = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func handlePasswordChange() {
+        errorMessage = nil
+        let cleanPassword = newPassword.trimmingCharacters(in: .whitespaces)
+        let cleanConfirm = confirmNewPassword.trimmingCharacters(in: .whitespaces)
+
+        guard cleanPassword.count >= 6 else {
+            errorMessage = "Password must be at least 6 characters long."
+            return
+        }
+
+        guard cleanPassword == cleanConfirm else {
+            errorMessage = "Passwords do not match."
+            return
+        }
+
+        isAuthenticating = true
+
+        Task {
+            do {
+                let _ = try await SupabaseAuthService.shared.changePassword(accessToken: currentAccessToken, newPassword: cleanPassword)
+                
+                await MainActor.run {
+                    isAuthenticating = false
+                    var updatedMetadata = tempUserMetadata ?? UserMetadata()
+                    updatedMetadata.passwordChanged = true
+                    
+                    let dashboard = getDashboard(for: tempUserEmail, metadata: updatedMetadata)
+                    withAnimation {
+                        changePasswordMode = false
+                    }
+                    onLoginSuccess(dashboard)
+                }
+            } catch {
+                await MainActor.run {
+                    isAuthenticating = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func quickLogin(with dashboard: SalesAssociateDashboard) {
+        email = dashboard.associate.email
+        passcode = "1234"
+        errorMessage = nil
+        isAuthenticating = true
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            isAuthenticating = false
+            onLoginSuccess(dashboard)
+        }
+    }
+
+    private func getDashboard(for email: String, metadata: UserMetadata?) -> SalesAssociateDashboard {
+        let lowercasedEmail = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if let sample = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == lowercasedEmail }) {
+            return sample
+        }
+        
+        let name = metadata?.name ?? email.components(separatedBy: "@").first?.capitalized ?? "Sales Associate"
+        let initials = metadata?.initials ?? String(name.split(separator: " ").compactMap { $0.first }.map { String($0) }.joined().prefix(2)).uppercased()
+        
+        let associate = AssociateProfile(
+            initials: initials.isEmpty ? "SA" : initials,
+            name: name,
+            role: metadata?.role ?? "Sales Associate",
+            boutique: metadata?.boutique ?? "South Mumbai",
+            email: email,
+            phone: metadata?.phone ?? "+91 98765 43210",
+            employeeID: metadata?.employeeID ?? "SA-\(Int.random(in: 1000...9999))",
+            shift: metadata?.shift ?? "Morning shift"
+        )
+        
+        return SalesAssociateDashboard(
+            associate: associate,
+            monthlyGoal: SalesGoal(
+                title: "Monthly Sales Goal",
+                progress: 0.50,
+                achieved: "Rs. 3.5L",
+                target: "Rs. 7.0L"
+            ),
+            priorityItems: [
+                PriorityItem(
+                    icon: "crown",
+                    title: "Welcome Appointment",
+                    subtitle: "First client visit scheduled",
+                    badge: "Today"
+                ),
+                PriorityItem(
+                    icon: "sparkles",
+                    title: "Onboarding completed",
+                    subtitle: "Setup your profile details",
+                    badge: nil
+                )
+            ],
+            quickActions: [
+                QuickAction(icon: "person.badge.plus", title: "Start Client", isPrimary: true),
+                QuickAction(icon: "calendar.badge.clock", title: "Appointments", isPrimary: false),
+                QuickAction(icon: "list.clipboard", title: "Issue", isPrimary: false),
+                QuickAction(icon: "viewfinder", title: "Scan Item", isPrimary: false)
+            ],
+            metrics: [
+                DashboardMetric(title: "Open Carts", value: "0"),
+                DashboardMetric(title: "Follow-ups", value: "0"),
+                DashboardMetric(title: "VIP Today", value: "0")
+            ],
+            weeklySales: WeeklySalesSummary(
+                total: "Rs. 0L",
+                change: "0%",
+                comparison: "Compared with last week",
+                bestDay: "Mon",
+                bestDayLabel: "Best sales day",
+                days: [
+                    DailySales(day: "Mon", amount: "0k", progress: 0.0, isBest: false),
+                    DailySales(day: "Tue", amount: "0k", progress: 0.0, isBest: false),
+                    DailySales(day: "Wed", amount: "0k", progress: 0.0, isBest: false),
+                    DailySales(day: "Thu", amount: "0k", progress: 0.0, isBest: false),
+                    DailySales(day: "Fri", amount: "0k", progress: 0.0, isBest: false),
+                    DailySales(day: "Sat", amount: "0k", progress: 0.0, isBest: false),
+                    DailySales(day: "Sun", amount: "0k", progress: 0.0, isBest: false)
+                ]
+            )
         )
     }
 }
@@ -48,6 +640,7 @@ struct TodayDashboardView: View {
     @Binding var recentlyViewedClients: [ClientProfile]
     @Binding var sellingSession: SellingSessionState
     @State private var isAssociateProfilePresented = false
+    let onLogout: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -83,7 +676,7 @@ struct TodayDashboardView: View {
             .background(Theme.background)
             .animation(.snappy(duration: 0.26), value: navigationMode)
             .sheet(isPresented: $isAssociateProfilePresented) {
-                AssociateProfileSheet(associate: dashboard.associate)
+                AssociateProfileSheet(associate: dashboard.associate, onLogout: onLogout)
             }
         }
     }
@@ -454,6 +1047,7 @@ private struct SidebarAssociateProfileButton: View {
 
 private struct AssociateProfileSheet: View {
     let associate: AssociateProfile
+    let onLogout: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -499,10 +1093,34 @@ private struct AssociateProfileSheet: View {
                 AssociateProfileInfoRow(title: "Permissions", value: "Clienteling, selling, stock visibility, issue intake", icon: "checkmark.shield")
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 16)
+
+            Button {
+                dismiss()
+                onLogout()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "power")
+                        .font(.headline.weight(.black))
+                    Text("LOG OUT")
+                        .font(.headline.weight(.black))
+                        .tracking(1.2)
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.48, green: 0.14, blue: 0.14), Color(red: 0.68, green: 0.22, blue: 0.22)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+            }
+            .buttonStyle(.plain)
         }
         .padding(26)
-        .frame(minWidth: 420, minHeight: 430)
+        .frame(minWidth: 420, minHeight: 510)
         .background(Theme.background)
     }
 }
@@ -3834,6 +4452,150 @@ enum Theme {
         startPoint: .top,
         endPoint: .bottom
     )
+}
+
+// MARK: - Supabase Auth Integration
+
+struct UserMetadata: Codable {
+    var passwordChanged: Bool?
+    var initials: String?
+    var name: String?
+    var role: String?
+    var boutique: String?
+    var phone: String?
+    var employeeID: String?
+    var shift: String?
+
+    enum CodingKeys: String, CodingKey {
+        case passwordChanged = "password_changed"
+        case initials
+        case name
+        case role
+        case boutique
+        case phone
+        case employeeID = "employee_id"
+        case shift
+    }
+}
+
+struct SupabaseUser: Codable {
+    let id: UUID
+    let email: String?
+    let userMetadata: UserMetadata?
+    let createdAt: String?
+    let lastSignInAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case email
+        case userMetadata = "user_metadata"
+        case createdAt = "created_at"
+        case lastSignInAt = "last_sign_in_at"
+    }
+}
+
+struct SupabaseSession: Codable {
+    let accessToken: String
+    let tokenType: String
+    let expiresIn: Int
+    let refreshToken: String
+    let user: SupabaseUser
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case tokenType = "token_type"
+        case expiresIn = "expires_in"
+        case refreshToken = "refresh_token"
+        case user
+    }
+}
+
+enum AuthError: Error, LocalizedError {
+    case invalidResponse
+    case serverError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            return "Invalid response received from authentication server."
+        case .serverError(let message):
+            return message
+        }
+    }
+}
+
+class SupabaseAuthService {
+    static let shared = SupabaseAuthService()
+
+    private let baseURL = "https://zfengirsvsjikrhxrfit.supabase.co/auth/v1"
+    private let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmZW5naXJzdnNqaWtyaHhyZml0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MTg5NTIsImV4cCI6MjA5Nzk5NDk1Mn0.rk57GzYVJDkHtEH649eXekzqox0s3O3nH3u8f5KHY5M"
+
+    func login(email: String, password: String) async throws -> SupabaseSession {
+        guard let url = URL(string: "\(baseURL)/token?grant_type=password") else {
+            throw AuthError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = ["email": email, "password": password]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse
+        }
+
+        if httpResponse.statusCode != 200 {
+            if let errorObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = errorObj["error_description"] as? String ?? errorObj["msg"] as? String {
+                throw AuthError.serverError(message)
+            }
+            throw AuthError.serverError("Authentication failed (Status code: \(httpResponse.statusCode))")
+        }
+
+        return try JSONDecoder().decode(SupabaseSession.self, from: data)
+    }
+
+    func changePassword(accessToken: String, newPassword: String) async throws -> SupabaseUser {
+        guard let url = URL(string: "\(baseURL)/user") else {
+            throw AuthError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "password": newPassword,
+            "data": [
+                "password_changed": true
+            ]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse
+        }
+
+        if httpResponse.statusCode != 200 {
+            if let errorObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = errorObj["msg"] as? String ?? errorObj["error_description"] as? String {
+                throw AuthError.serverError(message)
+            }
+            throw AuthError.serverError("Password change failed (Status code: \(httpResponse.statusCode))")
+        }
+
+        return try JSONDecoder().decode(SupabaseUser.self, from: data)
+    }
 }
 
 #Preview("iPad Today", traits: .landscapeLeft) {

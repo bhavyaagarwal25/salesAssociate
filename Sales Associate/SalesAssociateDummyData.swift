@@ -58,6 +58,128 @@ extension SalesAssociateDashboard {
             ]
         )
     )
+
+    static let samples: [SalesAssociateDashboard] = [
+        sample,
+        SalesAssociateDashboard(
+            associate: AssociateProfile(
+                initials: "KM",
+                name: "Kabir Malhotra",
+                role: "Senior Sales Associate",
+                boutique: "Delhi DLF Emporio",
+                email: "kabir.malhotra@rsms.in",
+                phone: "+91 99887 76655",
+                employeeID: "SA-3012",
+                shift: "Evening shift"
+            ),
+            monthlyGoal: SalesGoal(
+                title: "Monthly Sales Goal",
+                progress: 0.82,
+                achieved: "Rs. 8.2L",
+                target: "Rs. 10.0L"
+            ),
+            priorityItems: [
+                PriorityItem(
+                    icon: "star",
+                    title: "Special Handoff",
+                    subtitle: "Riya Shah, 3:00 PM",
+                    badge: "Upcoming"
+                ),
+                PriorityItem(
+                    icon: "wrench.adjustable",
+                    title: "Repair Check",
+                    subtitle: "Cartier glass replacement update",
+                    badge: "Urgent"
+                )
+            ],
+            quickActions: [
+                QuickAction(icon: "person.badge.plus", title: "Start Client", isPrimary: true),
+                QuickAction(icon: "calendar.badge.clock", title: "Appointments", isPrimary: false),
+                QuickAction(icon: "list.clipboard", title: "Issue", isPrimary: false),
+                QuickAction(icon: "viewfinder", title: "Scan Item", isPrimary: false)
+            ],
+            metrics: [
+                DashboardMetric(title: "Open Carts", value: "05"),
+                DashboardMetric(title: "Follow-ups", value: "14"),
+                DashboardMetric(title: "VIP Today", value: "05")
+            ],
+            weeklySales: WeeklySalesSummary(
+                total: "Rs. 2.10L",
+                change: "+18%",
+                comparison: "Compared with last week",
+                bestDay: "Sat",
+                bestDayLabel: "Best sales day",
+                days: [
+                    DailySales(day: "Mon", amount: "22k", progress: 0.35, isBest: false),
+                    DailySales(day: "Tue", amount: "28k", progress: 0.45, isBest: false),
+                    DailySales(day: "Wed", amount: "30k", progress: 0.48, isBest: false),
+                    DailySales(day: "Thu", amount: "35k", progress: 0.56, isBest: false),
+                    DailySales(day: "Fri", amount: "42k", progress: 0.68, isBest: false),
+                    DailySales(day: "Sat", amount: "53k", progress: 0.85, isBest: true),
+                    DailySales(day: "Sun", amount: "20k", progress: 0.32, isBest: false)
+                ]
+            )
+        ),
+        SalesAssociateDashboard(
+            associate: AssociateProfile(
+                initials: "AS",
+                name: "Ananya Sen",
+                role: "Boutique Ambassador",
+                boutique: "Bengaluru UB City",
+                email: "ananya.sen@rsms.in",
+                phone: "+91 91234 56789",
+                employeeID: "SA-4105",
+                shift: "General shift"
+            ),
+            monthlyGoal: SalesGoal(
+                title: "Monthly Sales Goal",
+                progress: 0.45,
+                achieved: "Rs. 3.6L",
+                target: "Rs. 8.0L"
+            ),
+            priorityItems: [
+                PriorityItem(
+                    icon: "crown",
+                    title: "Ultra-VIP Visit",
+                    subtitle: "Arjun Mehta, 5:30 PM",
+                    badge: "Today"
+                ),
+                PriorityItem(
+                    icon: "shippingbox",
+                    title: "Stock Reconcile",
+                    subtitle: "Verify 18 handbags in boutique",
+                    badge: "Routine"
+                )
+            ],
+            quickActions: [
+                QuickAction(icon: "person.badge.plus", title: "Start Client", isPrimary: true),
+                QuickAction(icon: "calendar.badge.clock", title: "Appointments", isPrimary: false),
+                QuickAction(icon: "list.clipboard", title: "Issue", isPrimary: false),
+                QuickAction(icon: "viewfinder", title: "Scan Item", isPrimary: false)
+            ],
+            metrics: [
+                DashboardMetric(title: "Open Carts", value: "08"),
+                DashboardMetric(title: "Follow-ups", value: "11"),
+                DashboardMetric(title: "VIP Today", value: "02")
+            ],
+            weeklySales: WeeklySalesSummary(
+                total: "Rs. 1.45L",
+                change: "-3%",
+                comparison: "Compared with last week",
+                bestDay: "Wed",
+                bestDayLabel: "Best sales day",
+                days: [
+                    DailySales(day: "Mon", amount: "18k", progress: 0.40, isBest: false),
+                    DailySales(day: "Tue", amount: "22k", progress: 0.48, isBest: false),
+                    DailySales(day: "Wed", amount: "32k", progress: 0.71, isBest: true),
+                    DailySales(day: "Thu", amount: "20k", progress: 0.44, isBest: false),
+                    DailySales(day: "Fri", amount: "25k", progress: 0.55, isBest: false),
+                    DailySales(day: "Sat", amount: "15k", progress: 0.33, isBest: false),
+                    DailySales(day: "Sun", amount: "13k", progress: 0.28, isBest: false)
+                ]
+            )
+        )
+    ]
 }
 
 extension StockDashboard {
