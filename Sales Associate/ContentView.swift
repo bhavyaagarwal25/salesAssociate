@@ -1,4 +1,6 @@
 import SwiftUI
+import MapKit
+import Combine
 
 struct ContentView: View {
     @State private var loggedInDashboard: SalesAssociateDashboard? = nil
@@ -1517,7 +1519,9 @@ private struct ClientDetailCard: View {
                 attributes: client.attributes,
                 tasks: updatedTasks,
                 purchaseHistory: client.purchaseHistory,
-                wishlistProductIDs: client.wishlistProductIDs
+                wishlistProductIDs: client.wishlistProductIDs,
+                defaultDeliveryAddress: client.defaultDeliveryAddress,
+                deliveryAddressDetail: client.deliveryAddressDetail
             )
         )
     }
@@ -1599,7 +1603,9 @@ private struct ClientDetailCard: View {
                 attributes: retainedAttributes + preferenceAttributes,
                 tasks: updatedTasks,
                 purchaseHistory: client.purchaseHistory,
-                wishlistProductIDs: client.wishlistProductIDs
+                wishlistProductIDs: client.wishlistProductIDs,
+                defaultDeliveryAddress: client.defaultDeliveryAddress,
+                deliveryAddressDetail: client.deliveryAddressDetail
             )
         )
     }
@@ -2531,12 +2537,25 @@ private struct SellContent: View {
                         subtitle: "Cart for \(session.displayName)",
                         emptyTitle: "Cart is empty",
                         emptySubtitle: "Use Add to Cart from product details to build this order.",
-                        primaryActionTitle: "Proceed to Pay",
-                        primaryActionIcon: "creditcard",
+                        primaryActionTitle: "Proceed",
+                        primaryActionIcon: "arrow.right.circle",
                         quantityForProduct: { product in
                             session.quantity(for: product)
                         },
                         onPrimaryAction: {
+                            selectedProduct = nil
+                            session.activePanel = .fulfillment
+                        }
+                    )
+                } else if session.activePanel == .fulfillment {
+                    CheckoutFulfillmentPanel(
+                        client: session.createdClient,
+                        onBack: {
+                            session.activePanel = .cart
+                        },
+                        onSaveDefaultAddress: { updatedClient in
+                            session.createdClient = updatedClient
+                            onCreateProfile(updatedClient)
                         }
                     )
                 } else if session.activePanel == .createProfile {
@@ -3576,6 +3595,481 @@ private struct SellProductDetailCard: View {
                 }
             }
         }
+    }
+}
+
+private enum CheckoutFulfillmentMethod: String, CaseIterable, Identifiable {
+    case pickup
+    case delivery
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .pickup:
+            return "Take from Store"
+        case .delivery:
+            return "Deliver to Address"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .pickup:
+            return "Client will take products from the boutique now."
+        case .delivery:
+            return "Search the delivery address before payment."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .pickup:
+            return "bag.fill"
+        case .delivery:
+            return "shippingbox.fill"
+        }
+    }
+}
+
+private struct AddressSuggestion: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+
+    var displayText: String {
+        let cleanSubtitle = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSubtitle.isEmpty else { return title }
+        return "\(title), \(cleanSubtitle)"
+    }
+}
+
+private final class AddressSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    @Published var query = "" {
+        didSet {
+            let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedQuery.count >= 2 else {
+                suggestions = []
+                completer.queryFragment = ""
+                return
+            }
+
+            completer.queryFragment = trimmedQuery
+        }
+    }
+
+    @Published var suggestions: [AddressSuggestion] = []
+
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = .address
+        completer.region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 19.0760, longitude: 72.8777),
+            span: MKCoordinateSpan(latitudeDelta: 0.70, longitudeDelta: 0.70)
+        )
+    }
+
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        let updatedSuggestions = completer.results.prefix(6).map {
+            AddressSuggestion(title: $0.title, subtitle: $0.subtitle)
+        }
+
+        DispatchQueue.main.async {
+            self.suggestions = updatedSuggestions
+        }
+    }
+
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        DispatchQueue.main.async {
+            self.suggestions = []
+        }
+    }
+}
+
+private struct CheckoutFulfillmentPanel: View {
+    let client: ClientProfile?
+    let onBack: () -> Void
+    let onSaveDefaultAddress: (ClientProfile) -> Void
+
+    @State private var method: CheckoutFulfillmentMethod = .pickup
+    @StateObject private var addressCompleter = AddressSearchCompleter()
+    @State private var buildingDetail = ""
+    @State private var shouldSaveDefaultAddress = false
+    @State private var showsAddressSuggestions = false
+    @State private var didContinueToPayment = false
+    @State private var didPrepareDefaultAddress = false
+
+    private var resolvedAddress: String {
+        addressCompleter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var resolvedBuildingDetail: String {
+        buildingDetail.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canProceedToPay: Bool {
+        method == .pickup || !resolvedAddress.isEmpty
+    }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 14) {
+                    ClientPanelBackButton(action: onBack)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Fulfillment")
+                            .font(.title2.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                        Text("Choose how the client wants to take the products.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+
+                    Text(client?.name ?? "Guest")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                HStack(spacing: 14) {
+                    ForEach(CheckoutFulfillmentMethod.allCases) { option in
+                        FulfillmentMethodButton(
+                            option: option,
+                            isSelected: method == option
+                        ) {
+                            method = option
+                            didContinueToPayment = false
+                        }
+                    }
+                }
+
+                if method == .pickup {
+                    PickupSummaryCard()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    DeliveryAddressSection(
+                        query: Binding(
+                            get: { addressCompleter.query },
+                            set: { newValue in
+                                addressCompleter.query = newValue
+                                showsAddressSuggestions = true
+                                didContinueToPayment = false
+                            }
+                        ),
+                        buildingDetail: $buildingDetail,
+                        shouldSaveDefaultAddress: $shouldSaveDefaultAddress,
+                        suggestions: addressCompleter.suggestions,
+                        showsSuggestions: showsAddressSuggestions,
+                        defaultAddress: client?.defaultDeliveryAddress,
+                        onUseDefaultAddress: useDefaultAddress,
+                        onSelectSuggestion: selectAddressSuggestion
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                Spacer(minLength: 0)
+
+                if didContinueToPayment {
+                    Label("Ready to continue payment at POS", systemImage: "checkmark.seal.fill")
+                        .font(.subheadline.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.selected.opacity(0.66), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+
+                Button {
+                    saveDefaultAddressIfNeeded()
+                    didContinueToPayment = true
+                } label: {
+                    Label("Proceed to Pay", systemImage: "creditcard")
+                        .font(.headline.weight(.black))
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .foregroundStyle(.white)
+                        .background(Theme.goldGradient, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canProceedToPay)
+                .opacity(canProceedToPay ? 1 : 0.55)
+            }
+            .frame(maxWidth: .infinity, minHeight: 560, alignment: .topLeading)
+            .animation(.snappy(duration: 0.24), value: method)
+            .onAppear(perform: prepareDefaultAddress)
+        }
+    }
+
+    private func prepareDefaultAddress() {
+        guard !didPrepareDefaultAddress else { return }
+        didPrepareDefaultAddress = true
+
+        guard let client else { return }
+        if let defaultAddress = client.defaultDeliveryAddress, !defaultAddress.isEmpty {
+            addressCompleter.query = defaultAddress
+        }
+        buildingDetail = client.deliveryAddressDetail ?? ""
+    }
+
+    private func useDefaultAddress() {
+        guard let client, let defaultAddress = client.defaultDeliveryAddress else { return }
+        addressCompleter.query = defaultAddress
+        buildingDetail = client.deliveryAddressDetail ?? ""
+        shouldSaveDefaultAddress = false
+        showsAddressSuggestions = false
+        didContinueToPayment = false
+    }
+
+    private func selectAddressSuggestion(_ suggestion: AddressSuggestion) {
+        addressCompleter.query = suggestion.displayText
+        showsAddressSuggestions = false
+        didContinueToPayment = false
+    }
+
+    private func saveDefaultAddressIfNeeded() {
+        guard method == .delivery,
+              shouldSaveDefaultAddress,
+              let client,
+              !resolvedAddress.isEmpty
+        else {
+            return
+        }
+
+        onSaveDefaultAddress(
+            ClientProfile(
+                id: client.id,
+                phone: client.phone,
+                initials: client.initials,
+                name: client.name,
+                tier: client.tier,
+                lifetimePurchaseAmount: client.lifetimePurchaseAmount,
+                boutique: client.boutique,
+                lastVisit: client.lastVisit,
+                status: client.status,
+                note: client.note,
+                attributes: client.attributes,
+                tasks: client.tasks,
+                purchaseHistory: client.purchaseHistory,
+                wishlistProductIDs: client.wishlistProductIDs,
+                defaultDeliveryAddress: resolvedAddress,
+                deliveryAddressDetail: resolvedBuildingDetail.isEmpty ? nil : resolvedBuildingDetail
+            )
+        )
+    }
+}
+
+private struct FulfillmentMethodButton: View {
+    let option: CheckoutFulfillmentMethod
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: option.icon)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(isSelected ? .white : Theme.gold)
+                    .frame(width: 44, height: 44)
+                    .background(isSelected ? .white.opacity(0.20) : Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(option.title)
+                        .font(.headline.weight(.black))
+                    Text(option.subtitle)
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .opacity(0.78)
+                }
+
+                Spacer()
+            }
+            .padding(15)
+            .frame(maxWidth: .infinity, minHeight: 102)
+            .foregroundStyle(isSelected ? .white : Theme.ink)
+            .background(isSelected ? AnyShapeStyle(Theme.goldGradient) : AnyShapeStyle(.white.opacity(0.58)), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(isSelected ? .white.opacity(0.22) : Theme.line.opacity(0.45), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PickupSummaryCard: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "storefront.fill")
+                .font(.title2.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 58, height: 58)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Store pickup selected")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                Text("The client can take the confirmed products from South Mumbai boutique after payment.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct DeliveryAddressSection: View {
+    @Binding var query: String
+    @Binding var buildingDetail: String
+    @Binding var shouldSaveDefaultAddress: Bool
+
+    let suggestions: [AddressSuggestion]
+    let showsSuggestions: Bool
+    let defaultAddress: String?
+    let onUseDefaultAddress: () -> Void
+    let onSelectSuggestion: (AddressSuggestion) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Delivery Details")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                Spacer()
+
+                if let defaultAddress, !defaultAddress.isEmpty {
+                    Button(action: onUseDefaultAddress) {
+                        Label("Use saved address", systemImage: "location.fill")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Theme.selected, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Address".uppercased())
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.muted)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                    TextField("Search delivery address", text: $query)
+                        .font(.headline.weight(.bold))
+                        .textInputAutocapitalization(.words)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 52)
+                .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                if showsSuggestions && !suggestions.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(suggestions) { suggestion in
+                            Button {
+                                onSelectSuggestion(suggestion)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "location")
+                                        .font(.subheadline.weight(.black))
+                                        .foregroundStyle(Theme.gold)
+                                        .frame(width: 34, height: 34)
+                                        .background(Theme.selected, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(suggestion.title)
+                                            .font(.subheadline.weight(.black))
+                                            .foregroundStyle(Theme.ink)
+                                            .lineLimit(1)
+                                        if !suggestion.subtitle.isEmpty {
+                                            Text(suggestion.subtitle)
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(Theme.muted)
+                                                .lineLimit(1)
+                                        }
+                                    }
+
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+
+                            if suggestion.id != suggestions.last?.id {
+                                Divider()
+                                    .overlay(Theme.line.opacity(0.36))
+                            }
+                        }
+                    }
+                    .background(.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                    )
+                }
+            }
+
+            ProfileTextField(
+                title: "Building / Flat / Floor",
+                placeholder: "optional",
+                text: $buildingDetail
+            )
+
+            Button {
+                shouldSaveDefaultAddress.toggle()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: shouldSaveDefaultAddress ? "checkmark.square.fill" : "square")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(shouldSaveDefaultAddress ? Theme.gold : Theme.muted)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Set as default delivery address")
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                        Text("Save this address to the client's profile for future orders.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+                }
+                .padding(14)
+                .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
     }
 }
 

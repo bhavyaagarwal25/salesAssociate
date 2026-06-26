@@ -4,6 +4,7 @@ enum SellingSessionPanel: Equatable {
     case wishlist
     case cart
     case createProfile
+    case fulfillment
 }
 
 struct SellingSessionState: Equatable {
@@ -45,7 +46,7 @@ struct SellingSessionState: Equatable {
 
     mutating func startForClient(_ client: ClientProfile) {
         guestID = nil
-        wishlistProductIDs = []
+        wishlistProductIDs = client.wishlistProductIDs
         cartProductIDs = []
         cartQuantitiesByProductID = [:]
         createdClient = client

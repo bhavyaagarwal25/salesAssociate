@@ -134,6 +134,8 @@ struct ClientProfile: Identifiable, Equatable, Codable {
     let tasks: [ClientTask]
     let purchaseHistory: [ClientPurchase]
     let wishlistProductIDs: [String]
+    let defaultDeliveryAddress: String?
+    let deliveryAddressDetail: String?
 
     init(
         id: String,
@@ -150,7 +152,9 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         attributes: [ClientAttribute],
         tasks: [ClientTask],
         purchaseHistory: [ClientPurchase] = [],
-        wishlistProductIDs: [String] = []
+        wishlistProductIDs: [String] = [],
+        defaultDeliveryAddress: String? = nil,
+        deliveryAddressDetail: String? = nil
     ) {
         self.id = id
         self.phone = phone
@@ -170,6 +174,8 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         self.tasks = tasks
         self.purchaseHistory = purchaseHistory
         self.wishlistProductIDs = wishlistProductIDs
+        self.defaultDeliveryAddress = defaultDeliveryAddress
+        self.deliveryAddressDetail = deliveryAddressDetail
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -188,6 +194,8 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         case tasks
         case purchaseHistory
         case wishlistProductIDs
+        case defaultDeliveryAddress
+        case deliveryAddressDetail
     }
 
     init(from decoder: Decoder) throws {
@@ -213,6 +221,8 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         tasks = try container.decode([ClientTask].self, forKey: .tasks)
         purchaseHistory = try container.decodeIfPresent([ClientPurchase].self, forKey: .purchaseHistory) ?? []
         wishlistProductIDs = try container.decodeIfPresent([String].self, forKey: .wishlistProductIDs) ?? []
+        defaultDeliveryAddress = try container.decodeIfPresent(String.self, forKey: .defaultDeliveryAddress)
+        deliveryAddressDetail = try container.decodeIfPresent(String.self, forKey: .deliveryAddressDetail)
     }
 
     func matches(_ query: String) -> Bool {
@@ -310,7 +320,9 @@ struct ClientProfile: Identifiable, Equatable, Codable {
             attributes: cleanedAttributes,
             tasks: cleanedTasks,
             purchaseHistory: purchaseHistory.isEmpty ? fallbackPurchaseHistory : purchaseHistory,
-            wishlistProductIDs: wishlistProductIDs.isEmpty ? fallbackWishlistProductIDs : wishlistProductIDs
+            wishlistProductIDs: wishlistProductIDs.isEmpty ? fallbackWishlistProductIDs : wishlistProductIDs,
+            defaultDeliveryAddress: defaultDeliveryAddress,
+            deliveryAddressDetail: deliveryAddressDetail
         )
     }
 
