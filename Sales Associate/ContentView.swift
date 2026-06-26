@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var loggedInDashboard: SalesAssociateDashboard? = nil
+    @State private var accessToken: String = ""
     @State private var selectedTab: SalesAssociateTab = .today
     @State private var navigationMode: SalesNavigationMode = .sidebar
     @State private var recentlyViewedClients: [ClientProfile] = []
@@ -30,25 +31,46 @@ struct ContentView: View {
                 onLogout: {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         loggedInDashboard = nil
+                        accessToken = ""
                         selectedTab = .today
                         sellingSession = SellingSessionState()
+                        clientProfiles = []
                     }
-                }
+                },
+                accessToken: accessToken
             )
             .transition(.opacity)
         } else {
-            LoginView { dashboard in
+            LoginView { dashboard, token in
                 withAnimation(.easeInOut(duration: 0.25)) {
-                    loggedInDashboard = dashboard
+                    self.accessToken = token
+                    self.loggedInDashboard = dashboard
+                    fetchClientsFromSupabase()
                 }
             }
             .transition(.opacity)
         }
     }
+
+    private func fetchClientsFromSupabase() {
+        guard !accessToken.isEmpty else { return }
+        let token = accessToken
+        Task {
+            do {
+                let fetched = try await SupabaseAuthService.shared.fetchClients(accessToken: token)
+                await MainActor.run {
+                    self.clientProfiles = fetched
+                    ClientProfileJSONStore.saveProfiles(fetched)
+                }
+            } catch {
+                print("Failed to fetch clients from Supabase: \(error)")
+            }
+        }
+    }
 }
 
 struct LoginView: View {
-    let onLoginSuccess: (SalesAssociateDashboard) -> Void
+    let onLoginSuccess: (SalesAssociateDashboard, String) -> Void
 
     @State private var email: String = ""
     @State private var passcode: String = ""
@@ -370,65 +392,6 @@ struct LoginView: View {
                 }
 
                 Spacer()
-
-                if !changePasswordMode {
-                    // Demo Accounts / Quick Login Section
-                    VStack(spacing: 16) {
-                        HStack(spacing: 8) {
-                            Rectangle()
-                                .fill(Theme.line)
-                                .frame(height: 1)
-                            
-                            Text("QUICK ACCESS DEMO ACCOUNTS")
-                                .font(.caption.weight(.black))
-                                .tracking(1.5)
-                                .foregroundStyle(Theme.muted)
-                                .padding(.horizontal, 8)
-
-                            Rectangle()
-                                .fill(Theme.line)
-                                .frame(height: 1)
-                        }
-                        .frame(width: 520)
-
-                        HStack(spacing: 16) {
-                            ForEach(SalesAssociateDashboard.samples, id: \.associate.employeeID) { sampleDashboard in
-                                Button {
-                                    quickLogin(with: sampleDashboard)
-                                } label: {
-                                    VStack(spacing: 10) {
-                                        Text(sampleDashboard.associate.initials)
-                                            .font(.headline.weight(.black))
-                                            .foregroundStyle(.white)
-                                            .frame(width: 50, height: 50)
-                                            .background(Theme.goldGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                                        VStack(spacing: 3) {
-                                            Text(sampleDashboard.associate.name)
-                                                .font(.headline.weight(.bold))
-                                                .foregroundStyle(Theme.ink)
-                                                .lineLimit(1)
-                                            
-                                            Text(sampleDashboard.associate.boutique)
-                                                .font(.caption2.weight(.bold))
-                                                .foregroundStyle(Theme.muted)
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    .padding(16)
-                                    .frame(width: 160)
-                                    .background(.white.opacity(0.55), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                            .stroke(Theme.line.opacity(0.55), lineWidth: 1)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.bottom, 40)
-                }
             }
             .padding(.vertical, 30)
         }
@@ -460,7 +423,7 @@ struct LoginView: View {
                     let matchedDashboard = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == cleanEmail })!
                     await MainActor.run {
                         isAuthenticating = false
-                        onLoginSuccess(matchedDashboard)
+                        onLoginSuccess(matchedDashboard, "")
                     }
                     return
                 }
@@ -483,7 +446,7 @@ struct LoginView: View {
                         }
                     } else {
                         let dashboard = getDashboard(for: cleanEmail, metadata: session.user.userMetadata)
-                        onLoginSuccess(dashboard)
+                        onLoginSuccess(dashboard, session.accessToken)
                     }
                 }
             } catch {
@@ -525,7 +488,7 @@ struct LoginView: View {
                     withAnimation {
                         changePasswordMode = false
                     }
-                    onLoginSuccess(dashboard)
+                    onLoginSuccess(dashboard, currentAccessToken)
                 }
             } catch {
                 await MainActor.run {
@@ -544,7 +507,7 @@ struct LoginView: View {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             isAuthenticating = false
-            onLoginSuccess(dashboard)
+            onLoginSuccess(dashboard, "")
         }
     }
 
@@ -641,6 +604,7 @@ struct TodayDashboardView: View {
     @Binding var sellingSession: SellingSessionState
     @State private var isAssociateProfilePresented = false
     let onLogout: () -> Void
+    let accessToken: String
 
     var body: some View {
         GeometryReader { proxy in
@@ -695,7 +659,8 @@ struct TodayDashboardView: View {
                 products: products,
                 onStartGuestClient: startGuestSelling,
                 onBuildCuratedCart: startClientSelling,
-                recentlyViewedClients: $recentlyViewedClients
+                recentlyViewedClients: $recentlyViewedClients,
+                accessToken: accessToken
             )
         case .sell:
             SellContent(
@@ -737,6 +702,18 @@ struct TodayDashboardView: View {
         ClientProfileJSONStore.saveProfiles(clientProfiles)
         recentlyViewedClients.removeAll { $0.id == profile.id }
         recentlyViewedClients.insert(profile, at: 0)
+
+        let token = accessToken
+        if !token.isEmpty {
+            Task {
+                do {
+                    try await SupabaseAuthService.shared.saveClient(accessToken: token, client: profile)
+                    print("Successfully saved created profile to Supabase.")
+                } catch {
+                    print("Failed to save created profile to Supabase: \(error)")
+                }
+            }
+        }
     }
 }
 
@@ -1168,6 +1145,7 @@ private struct ClientelingContent: View {
     let onBuildCuratedCart: (ClientProfile) -> Void
 
     @Binding var recentlyViewedClients: [ClientProfile]
+    let accessToken: String
 
     @State private var query = ""
     @State private var selectedClient: ClientProfile?
@@ -1259,6 +1237,18 @@ private struct ClientelingContent: View {
         ClientProfileJSONStore.saveProfiles(clientProfiles)
         rememberRecentlyViewed(updatedClient)
         selectedClient = updatedClient
+
+        let token = accessToken
+        if !token.isEmpty {
+            Task {
+                do {
+                    try await SupabaseAuthService.shared.saveClient(accessToken: token, client: updatedClient)
+                    print("Successfully updated client profile in Supabase.")
+                } catch {
+                    print("Failed to update client profile in Supabase: \(error)")
+                }
+            }
+        }
     }
 }
 
@@ -4595,6 +4585,76 @@ class SupabaseAuthService {
         }
 
         return try JSONDecoder().decode(SupabaseUser.self, from: data)
+    }
+
+    func fetchClients(accessToken: String) async throws -> [ClientProfile] {
+        let restBaseURL = baseURL.replacingOccurrences(of: "/auth/v1", with: "/rest/v1")
+        
+        do {
+            return try await performFetchClientsRequest(urlStr: "\(restBaseURL)/clients", accessToken: accessToken)
+        } catch {
+            return try await performFetchClientsRequest(urlStr: "\(restBaseURL)/client_profiles", accessToken: accessToken)
+        }
+    }
+
+    private func performFetchClientsRequest(urlStr: String, accessToken: String) async throws -> [ClientProfile] {
+        guard let url = URL(string: urlStr) else {
+            throw AuthError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse
+        }
+
+        if httpResponse.statusCode != 200 {
+            throw AuthError.serverError("Fetch failed with status: \(httpResponse.statusCode)")
+        }
+
+        return try JSONDecoder().decode([ClientProfile].self, from: data)
+    }
+
+    func saveClient(accessToken: String, client: ClientProfile) async throws {
+        let restBaseURL = baseURL.replacingOccurrences(of: "/auth/v1", with: "/rest/v1")
+        
+        do {
+            try await performSaveClientRequest(urlStr: "\(restBaseURL)/clients", accessToken: accessToken, client: client)
+        } catch {
+            try await performSaveClientRequest(urlStr: "\(restBaseURL)/client_profiles", accessToken: accessToken, client: client)
+        }
+    }
+
+    private func performSaveClientRequest(urlStr: String, accessToken: String, client: ClientProfile) async throws {
+        guard let url = URL(string: urlStr) else {
+            throw AuthError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
+
+        let encoder = JSONEncoder()
+        request.httpBody = try encoder.encode(client)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AuthError.invalidResponse
+        }
+
+        if httpResponse.statusCode != 201 && httpResponse.statusCode != 200 {
+            throw AuthError.serverError("Save failed with status: \(httpResponse.statusCode)")
+        }
     }
 }
 
