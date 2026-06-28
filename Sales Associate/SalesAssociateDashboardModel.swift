@@ -123,11 +123,16 @@ struct ClientProfile: Identifiable, Equatable, Codable {
     let phone: String
     let initials: String
     let name: String
+    let email: String
+    let birthday: String
+    let preferredLanguage: String
+    let preferredContactMethod: String
+    let marketingConsent: Bool
+    let followUpDate: String
     let tier: String
     let rewardPoints: Int
     let lifetimePurchaseAmount: Int
     let boutique: String
-    let lastVisit: String
     let status: String
     let note: String
     let attributes: [ClientAttribute]
@@ -142,11 +147,16 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         phone: String,
         initials: String,
         name: String,
+        email: String = "",
+        birthday: String = "",
+        preferredLanguage: String = "English",
+        preferredContactMethod: String = "Phone",
+        marketingConsent: Bool = false,
+        followUpDate: String = "",
         tier: String? = nil,
         rewardPoints: Int? = nil,
         lifetimePurchaseAmount: Int? = nil,
         boutique: String,
-        lastVisit: String,
         status: String,
         note: String,
         attributes: [ClientAttribute],
@@ -160,6 +170,12 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         self.phone = phone
         self.initials = initials
         self.name = name
+        self.email = email
+        self.birthday = birthday
+        self.preferredLanguage = preferredLanguage
+        self.preferredContactMethod = preferredContactMethod
+        self.marketingConsent = marketingConsent
+        self.followUpDate = followUpDate
         let resolvedLifetimePurchaseAmount = lifetimePurchaseAmount
             ?? rewardPoints.map { max(0, $0) * 1_000 }
             ?? ClientTier.minimumLifetimeAmount(for: tier)
@@ -167,7 +183,6 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         self.rewardPoints = ClientTier.rewardPoints(for: self.lifetimePurchaseAmount)
         self.tier = ClientTier.displayName(for: self.rewardPoints)
         self.boutique = boutique
-        self.lastVisit = lastVisit
         self.status = status
         self.note = note
         self.attributes = attributes
@@ -183,11 +198,16 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         case phone
         case initials
         case name
+        case email
+        case birthday
+        case preferredLanguage
+        case preferredContactMethod
+        case marketingConsent
+        case followUpDate
         case tier
         case rewardPoints
         case lifetimePurchaseAmount
         case boutique
-        case lastVisit
         case status
         case note
         case attributes
@@ -204,6 +224,12 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         phone = try container.decode(String.self, forKey: .phone)
         initials = try container.decode(String.self, forKey: .initials)
         name = try container.decode(String.self, forKey: .name)
+        email = try container.decodeIfPresent(String.self, forKey: .email) ?? ""
+        birthday = try container.decodeIfPresent(String.self, forKey: .birthday) ?? ""
+        preferredLanguage = try container.decodeIfPresent(String.self, forKey: .preferredLanguage) ?? "English"
+        preferredContactMethod = try container.decodeIfPresent(String.self, forKey: .preferredContactMethod) ?? "Phone"
+        marketingConsent = try container.decodeIfPresent(Bool.self, forKey: .marketingConsent) ?? false
+        followUpDate = try container.decodeIfPresent(String.self, forKey: .followUpDate) ?? ""
         let storedTier = try container.decodeIfPresent(String.self, forKey: .tier)
         let storedRewardPoints = try container.decodeIfPresent(Int.self, forKey: .rewardPoints)
         let storedLifetimePurchaseAmount = try container.decodeIfPresent(Int.self, forKey: .lifetimePurchaseAmount)
@@ -214,7 +240,6 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         rewardPoints = ClientTier.rewardPoints(for: lifetimePurchaseAmount)
         tier = ClientTier.displayName(for: rewardPoints)
         boutique = try container.decode(String.self, forKey: .boutique)
-        lastVisit = try container.decode(String.self, forKey: .lastVisit)
         status = try container.decode(String.self, forKey: .status)
         note = try container.decode(String.self, forKey: .note)
         attributes = try container.decode([ClientAttribute].self, forKey: .attributes)
@@ -235,6 +260,7 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         return name.lowercased().contains(normalizedQuery)
             || id.lowercased().contains(normalizedQuery)
             || phone.lowercased().contains(normalizedQuery)
+            || email.lowercased().contains(normalizedQuery)
     }
 
     var allowsPreferenceVisibility: Bool {
@@ -311,10 +337,15 @@ struct ClientProfile: Identifiable, Equatable, Codable {
             phone: phone,
             initials: initials,
             name: name,
+            email: email,
+            birthday: birthday,
+            preferredLanguage: preferredLanguage,
+            preferredContactMethod: preferredContactMethod,
+            marketingConsent: marketingConsent,
+            followUpDate: followUpDate,
             tier: tier,
             lifetimePurchaseAmount: fallbackLifetimePurchaseAmount ?? lifetimePurchaseAmount,
             boutique: boutique,
-            lastVisit: lastVisit,
             status: status,
             note: note,
             attributes: cleanedAttributes,

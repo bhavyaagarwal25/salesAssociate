@@ -552,24 +552,40 @@ struct LoginView: View {
 
     private func getDashboard(for email: String, metadata: UserMetadata?) -> SalesAssociateDashboard {
         let lowercasedEmail = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let sampleDashboard = SalesAssociateDashboard.samples.first { $0.associate.email.lowercased() == lowercasedEmail }
         
-        if let sample = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == lowercasedEmail }) {
-            return sample
+        if let sampleDashboard {
+            guard metadataHasAssociateData(metadata) else {
+                return sampleDashboard
+            }
+
+            let associate = makeAssociateProfile(
+                for: email,
+                metadata: metadata,
+                fallback: sampleDashboard.associate
+            )
+
+            return SalesAssociateDashboard(
+                associate: associate,
+                monthlyGoal: sampleDashboard.monthlyGoal,
+                priorityItems: sampleDashboard.priorityItems,
+                quickActions: sampleDashboard.quickActions,
+                metrics: sampleDashboard.metrics,
+                weeklySales: sampleDashboard.weeklySales
+            )
         }
         
-        let name = metadata?.name ?? email.components(separatedBy: "@").first?.capitalized ?? "Sales Associate"
-        let initials = metadata?.initials ?? String(name.split(separator: " ").compactMap { $0.first }.map { String($0) }.joined().prefix(2)).uppercased()
-        
-        let associate = AssociateProfile(
-            initials: initials.isEmpty ? "SA" : initials,
-            name: name,
-            role: metadata?.role ?? "Sales Associate",
-            boutique: metadata?.boutique ?? "South Mumbai",
+        let fallbackAssociate = AssociateProfile(
+            initials: "SA",
+            name: email.components(separatedBy: "@").first?.capitalized ?? "Sales Associate",
+            role: "Sales Associate",
+            boutique: "South Mumbai",
             email: email,
-            phone: metadata?.phone ?? "+91 98765 43210",
-            employeeID: metadata?.employeeID ?? "SA-\(Int.random(in: 1000...9999))",
-            shift: metadata?.shift ?? "Morning shift"
+            phone: "+91 98765 43210",
+            employeeID: "SA-\(abs(lowercasedEmail.hashValue % 9000) + 1000)",
+            shift: "Morning shift"
         )
+        let associate = makeAssociateProfile(for: email, metadata: metadata, fallback: fallbackAssociate)
         
         return SalesAssociateDashboard(
             associate: associate,
@@ -621,6 +637,48 @@ struct LoginView: View {
                 ]
             )
         )
+    }
+
+    private func metadataHasAssociateData(_ metadata: UserMetadata?) -> Bool {
+        [
+            metadata?.initials,
+            metadata?.name,
+            metadata?.role,
+            metadata?.boutique,
+            metadata?.phone,
+            metadata?.employeeID,
+            metadata?.shift
+        ]
+        .contains { nonEmpty($0) != nil }
+    }
+
+    private func makeAssociateProfile(
+        for email: String,
+        metadata: UserMetadata?,
+        fallback: AssociateProfile
+    ) -> AssociateProfile {
+        let name = nonEmpty(metadata?.name) ?? fallback.name
+        let derivedInitials = String(name.split(separator: " ").compactMap { $0.first }.map { String($0) }.joined().prefix(2)).uppercased()
+        let initials = nonEmpty(metadata?.initials) ?? (derivedInitials.isEmpty ? fallback.initials : derivedInitials)
+
+        return AssociateProfile(
+            initials: initials,
+            name: name,
+            role: nonEmpty(metadata?.role) ?? fallback.role,
+            boutique: nonEmpty(metadata?.boutique) ?? fallback.boutique,
+            email: email,
+            phone: nonEmpty(metadata?.phone) ?? fallback.phone,
+            employeeID: nonEmpty(metadata?.employeeID) ?? fallback.employeeID,
+            shift: nonEmpty(metadata?.shift) ?? fallback.shift
+        )
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let cleaned = value?.trimmingCharacters(in: .whitespacesAndNewlines), !cleaned.isEmpty else {
+            return nil
+        }
+
+        return cleaned
     }
 }
 
@@ -1448,6 +1506,20 @@ private struct ClientDetailCard: View {
         client.allowsPreferenceVisibility ? client.visiblePreferenceAttributes : []
     }
 
+    private var visibleDefaultDeliveryAddress: String? {
+        guard client.allowsPreferenceVisibility else { return nil }
+
+        let address = client.defaultDeliveryAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return address.isEmpty ? nil : address
+    }
+
+    private var visibleDeliveryAddressDetail: String? {
+        guard client.allowsPreferenceVisibility else { return nil }
+
+        let detail = client.deliveryAddressDetail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return detail.isEmpty ? nil : detail
+    }
+
     private var wishlistProducts: [SalesProduct] {
         let wishlistIDs = Set(client.wishlistProductIDs)
         return products.filter { wishlistIDs.contains($0.id) }
@@ -1507,10 +1579,15 @@ private struct ClientDetailCard: View {
                 phone: client.phone,
                 initials: client.initials,
                 name: client.name,
+                email: client.email,
+                birthday: client.birthday,
+                preferredLanguage: client.preferredLanguage,
+                preferredContactMethod: client.preferredContactMethod,
+                marketingConsent: client.marketingConsent,
+                followUpDate: client.followUpDate,
                 tier: client.tier,
                 lifetimePurchaseAmount: client.lifetimePurchaseAmount,
                 boutique: client.boutique,
-                lastVisit: client.lastVisit,
                 status: consentStatus(
                     preferenceVisibilityAllowed: preferenceVisibilityAllowed,
                     purchaseHistoryAllowed: purchaseHistoryAllowed
@@ -1594,10 +1671,15 @@ private struct ClientDetailCard: View {
                 phone: client.phone,
                 initials: client.initials,
                 name: client.name,
+                email: client.email,
+                birthday: client.birthday,
+                preferredLanguage: client.preferredLanguage,
+                preferredContactMethod: client.preferredContactMethod,
+                marketingConsent: client.marketingConsent,
+                followUpDate: client.followUpDate,
                 tier: client.tier,
                 lifetimePurchaseAmount: client.lifetimePurchaseAmount,
                 boutique: client.boutique,
-                lastVisit: client.lastVisit,
                 status: client.status,
                 note: note,
                 attributes: retainedAttributes + preferenceAttributes,
@@ -1675,7 +1757,7 @@ private struct ClientDetailCard: View {
                         .lineLimit(2)
                         .minimumScaleFactor(0.78)
 
-                    Text("\(client.boutique) • last visit \(client.lastVisit) • \(client.status.lowercased())")
+                    Text("\(client.boutique) • \(client.status.lowercased())")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.muted)
                         .lineLimit(2)
@@ -1696,6 +1778,13 @@ private struct ClientDetailCard: View {
                 }
             } else if !hasInsightConsent {
                 ClientRestrictedInsightNotice()
+            }
+
+            if let visibleDefaultDeliveryAddress {
+                ClientDeliveryAddressCard(
+                    address: visibleDefaultDeliveryAddress,
+                    detail: visibleDeliveryAddressDetail
+                )
             }
 
             if hasInsightConsent, let visibleClientNote {
@@ -1856,6 +1945,48 @@ private struct ClientAttributeTile: View {
     }
 }
 
+private struct ClientDeliveryAddressCard: View {
+    let address: String
+    let detail: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "location.fill")
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 44, height: 44)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Default Delivery Address".uppercased())
+                    .font(.caption.weight(.black))
+                    .tracking(1.1)
+                    .foregroundStyle(Theme.muted)
+
+                Text(address)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let detail {
+                    Text(detail)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.60), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
 private struct ClientRestrictedInsightNotice: View {
     var body: some View {
         Label {
@@ -1863,7 +1994,7 @@ private struct ClientRestrictedInsightNotice: View {
                 Text("Other preferences are hidden until clients consent")
                     .font(.headline.weight(.black))
                     .foregroundStyle(Theme.ink)
-                Text("Purchase history, wishlist, style notes, and detailed preferences will appear after consent is captured.")
+                Text("Purchase history, wishlist, delivery address, style notes, and detailed preferences will appear after consent is captured.")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.muted)
             }
@@ -2542,6 +2673,12 @@ private struct SellContent: View {
                         quantityForProduct: { product in
                             session.quantity(for: product)
                         },
+                        onIncrementQuantity: { product in
+                            session.incrementCartQuantity(for: product)
+                        },
+                        onDecrementQuantity: { product in
+                            session.decrementCartQuantity(for: product)
+                        },
                         onPrimaryAction: {
                             selectedProduct = nil
                             session.activePanel = .fulfillment
@@ -2671,6 +2808,8 @@ private struct SellContent: View {
         primaryActionTitle: String,
         primaryActionIcon: String,
         quantityForProduct: @escaping (SalesProduct) -> Int?,
+        onIncrementQuantity: ((SalesProduct) -> Void)? = nil,
+        onDecrementQuantity: ((SalesProduct) -> Void)? = nil,
         onPrimaryAction: @escaping () -> Void
     ) -> some View {
         HStack(alignment: .top, spacing: 18) {
@@ -2685,6 +2824,8 @@ private struct SellContent: View {
                 primaryActionTitle: primaryActionTitle,
                 primaryActionIcon: primaryActionIcon,
                 quantityForProduct: quantityForProduct,
+                onIncrementQuantity: onIncrementQuantity,
+                onDecrementQuantity: onDecrementQuantity,
                 onSelectProduct: { product in
                     selectedProduct = product
                 },
@@ -2811,20 +2952,28 @@ private struct ToolbarPillButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            ZStack(alignment: .topTrailing) {
                 Image(systemName: icon)
                     .font(.title2.weight(.black))
                     .foregroundStyle(Theme.ink)
-                    .frame(width: 30, height: 54)
+                    .frame(width: 54, height: 54)
 
                 if showsCount, count > 0 {
                     Text("\(count)")
-                        .font(.headline.weight(.black))
-                        .foregroundStyle(Theme.gold)
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Theme.goldGradient, in: Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(.white.opacity(0.92), lineWidth: 1.5)
+                        )
+                        .offset(x: 5, y: 3)
                         .accessibilityHidden(true)
                 }
             }
-            .frame(minWidth: 54, minHeight: 54)
+            .frame(width: 54, height: 54)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showsCount && count > 0 ? "\(title), \(count) items" : title)
@@ -3847,10 +3996,15 @@ private struct CheckoutFulfillmentPanel: View {
                 phone: client.phone,
                 initials: client.initials,
                 name: client.name,
+                email: client.email,
+                birthday: client.birthday,
+                preferredLanguage: client.preferredLanguage,
+                preferredContactMethod: client.preferredContactMethod,
+                marketingConsent: client.marketingConsent,
+                followUpDate: client.followUpDate,
                 tier: client.tier,
                 lifetimePurchaseAmount: client.lifetimePurchaseAmount,
                 boutique: client.boutique,
-                lastVisit: client.lastVisit,
                 status: client.status,
                 note: client.note,
                 attributes: client.attributes,
@@ -4084,6 +4238,8 @@ private struct SellingCollectionPanel: View {
     let primaryActionTitle: String
     let primaryActionIcon: String
     let quantityForProduct: (SalesProduct) -> Int?
+    let onIncrementQuantity: ((SalesProduct) -> Void)?
+    let onDecrementQuantity: ((SalesProduct) -> Void)?
     let onSelectProduct: (SalesProduct) -> Void
     let onBack: () -> Void
     let onDiscardClient: () -> Void
@@ -4127,15 +4283,19 @@ private struct SellingCollectionPanel: View {
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(products) { product in
-                            Button {
-                                onSelectProduct(product)
-                            } label: {
-                                SellingCollectionRow(
-                                    product: product,
-                                    quantity: quantityForProduct(product)
-                                )
-                            }
-                            .buttonStyle(.plain)
+                            SellingCollectionRow(
+                                product: product,
+                                quantity: quantityForProduct(product),
+                                onSelectProduct: {
+                                    onSelectProduct(product)
+                                },
+                                onIncrementQuantity: onIncrementQuantity.map { action in
+                                    { action(product) }
+                                },
+                                onDecrementQuantity: onDecrementQuantity.map { action in
+                                    { action(product) }
+                                }
+                            )
                         }
                     }
                 }
@@ -4208,30 +4368,54 @@ private struct EmptySellingCollection: View {
 private struct SellingCollectionRow: View {
     let product: SalesProduct
     let quantity: Int?
+    let onSelectProduct: () -> Void
+    let onIncrementQuantity: (() -> Void)?
+    let onDecrementQuantity: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 14) {
-            ProductImageView(imageName: product.imageName)
-                .frame(width: 84, height: 84)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Button(action: onSelectProduct) {
+                HStack(spacing: 14) {
+                    ProductImageView(imageName: product.imageName)
+                        .frame(width: 84, height: 84)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(product.name)
-                    .font(.headline.weight(.black))
-                    .foregroundStyle(Theme.ink)
-                Text("\(product.audience) • \(product.id)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.muted)
-                Text(quantityText)
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(Theme.gold)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(product.name)
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                        Text("\(product.audience) • \(product.id)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                        if quantity == nil {
+                            Text("Wishlist item")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(Theme.gold)
+                        }
+                    }
+                }
             }
+            .buttonStyle(.plain)
 
             Spacer()
 
-            Text(product.price)
-                .font(.headline.weight(.black))
-                .foregroundStyle(Theme.ink)
+            VStack(alignment: .trailing, spacing: 10) {
+                Text(product.price)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                if let quantity {
+                    CartQuantityStepper(
+                        quantity: quantity,
+                        onDecrement: {
+                            onDecrementQuantity?()
+                        },
+                        onIncrement: {
+                            onIncrementQuantity?()
+                        }
+                    )
+                }
+            }
         }
         .padding(14)
         .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -4241,11 +4425,46 @@ private struct SellingCollectionRow: View {
         )
     }
 
-    private var quantityText: String {
-        guard let quantity, quantity > 0 else {
-            return "Wishlist item"
+}
+
+private struct CartQuantityStepper: View {
+    let quantity: Int
+    let onDecrement: () -> Void
+    let onIncrement: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onDecrement) {
+                Image(systemName: "minus")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(quantity > 1 ? Theme.ink : Theme.muted.opacity(0.45))
+                    .frame(width: 28, height: 28)
+                    .background(.white.opacity(0.76), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(quantity <= 1)
+
+            Text("\(quantity)")
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
+                .frame(minWidth: 22)
+
+            Button(action: onIncrement) {
+                Image(systemName: "plus")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 28, height: 28)
+                    .background(.white.opacity(0.76), in: Circle())
+            }
+            .buttonStyle(.plain)
         }
-        return "Quantity: \(quantity)"
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Theme.selected.opacity(0.88), in: Capsule())
+        .overlay(Capsule().stroke(Theme.line.opacity(0.42), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Quantity \(quantity)")
+        .accessibilityHint("Use plus or minus to update cart quantity")
     }
 }
 
@@ -4258,96 +4477,147 @@ private struct CreateClientProfilePanel: View {
     @State private var phone = ""
     @State private var email = ""
     @State private var birthday = ""
+    @State private var preferredLanguage = "English"
+    @State private var occasion = "N/A"
     @State private var preferredStyle = "N/A"
     @State private var budget = "N/A"
     @State private var size = "N/A"
     @State private var materialPreference = "N/A"
-    @State private var colorPreference = ""
+    @State private var colorPreference = "N/A"
+    @State private var preferredCategory = "N/A"
+    @State private var brandPreference = "N/A"
+    @State private var preferredContactMethod = "Phone"
+    @State private var marketingConsent = false
     @State private var notes = ""
+    @State private var followUpDate = ""
     @State private var consentAccepted = false
 
-    private let styles = ["N/A", "Minimal", "Statement", "Classic", "Bridal", "Evening"]
-    private let budgets = ["N/A", "Rs. 50K+", "Rs. 1L+", "Rs. 2L+", "Rs. 5L+"]
-    private let sizes = ["N/A", "EU 36", "EU 38", "EU 40", "One size"]
-    private let materials = ["N/A", "Gold hardware", "Silver hardware", "Pearl", "Diamond", "Leather"]
+    private let languages = ["English", "Hindi", "Marathi", "Gujarati"]
+    private let occasions = ["N/A", "Wedding", "Anniversary", "Birthday", "Festive", "Corporate Gift", "Evening Event", "Travel"]
+    private let styles = ["N/A", "Minimal", "Statement", "Classic", "Bridal", "Evening", "Formal", "Daily Luxury"]
+    private let budgets = ["N/A", "Rs. 50K+", "Rs. 1L+", "Rs. 2L+", "Rs. 5L+", "Rs. 10L+"]
+    private let sizes = ["N/A", "EU 36", "EU 38", "EU 40", "One size", "Watch 36mm", "Watch 40mm"]
+    private let materials = ["N/A", "Gold", "Rose Gold", "Silver", "Diamond", "Pearl", "Leather", "Satin"]
+    private let colors = ["N/A", "Champagne", "Black", "Ivory", "Gold", "Rose Gold", "Emerald", "Pearl", "Blue", "Brown"]
+    private let categories = ["N/A", "Handbags", "Clutches", "Watches", "Jewellery", "Necklaces", "Footwear", "Accessories"]
+    private let brands = ["N/A", "Bvlgari", "Cartier", "Dior", "Gucci", "Hermes", "Jimmy Choo", "Louis Vuitton", "Rolex", "Titan"]
+    private let contactMethods = ["Phone", "WhatsApp", "Email", "SMS"]
 
     private var canSave: Bool {
         !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var formColumns: [GridItem] {
+        [
+            GridItem(.flexible(), spacing: 12),
+            GridItem(.flexible(), spacing: 12)
+        ]
+    }
+
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 14) {
-                    ClientPanelBackButton(action: onBack)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top, spacing: 14) {
+                        ClientPanelBackButton(action: onBack)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Create Client Profile")
-                            .font(.title2.weight(.black))
-                        Text("Convert \(guestID) into a saved client profile")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.muted)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Create Client Profile")
+                                .font(.title2.weight(.black))
+                            Text("Convert \(guestID) into a saved client profile")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.muted)
+                        }
+
+                        Spacer()
+
+                        Text("Required: name and phone")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 8)
+                            .background(Theme.selected, in: Capsule())
                     }
 
-                    Spacer()
-
-                    Text("Required fields marked")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(Theme.gold)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 8)
-                        .background(Theme.selected, in: Capsule())
-                }
-
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 16) {
                         ProfileFormSection(title: "Identity") {
-                            ProfileTextField(title: "Full Name *", placeholder: "Client name", text: $fullName)
-                            ProfileTextField(title: "Phone *", placeholder: "+91 phone number", text: $phone)
-                            ProfileTextField(title: "Email", placeholder: "optional email", text: $email)
-                            ProfileTextField(title: "Birthday / Occasion", placeholder: "optional date or occasion", text: $birthday)
-                        }
-
-                        ProfileFormSection(title: "Preferences") {
-                            ProfileDropdown(title: "Style", options: styles, selection: $preferredStyle)
-                            ProfileDropdown(title: "Budget", options: budgets, selection: $budget)
-                            ProfileDropdown(title: "Size", options: sizes, selection: $size)
-                            ProfileDropdown(title: "Material", options: materials, selection: $materialPreference)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        ProfileFormSection(title: "Selling Notes") {
-                            ProfileTextField(title: "Color Preference", placeholder: "champagne, black, emerald...", text: $colorPreference)
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Client Note")
-                                    .font(.headline.weight(.black))
-                                TextEditor(text: $notes)
-                                    .scrollContentBackground(.hidden)
-                                    .padding(10)
-                                    .frame(minHeight: 152)
-                                    .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
-                                    )
-                                    .overlay(alignment: .topLeading) {
-                                        if notes.isEmpty {
-                                            Text("Add preferences, occasion, product interest, or follow-up promise...")
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(Theme.muted.opacity(0.66))
-                                                .padding(.horizontal, 16)
-                                                .padding(.vertical, 18)
-                                        }
-                                    }
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileTextField(title: "Name *", placeholder: "Client name", text: $fullName)
+                                ProfileTextField(title: "Phone *", placeholder: "+91 phone number", text: $phone)
+                                ProfileTextField(title: "Email", placeholder: "optional email", text: $email)
+                                ProfileTextField(title: "Birthday", placeholder: "DD MMM or birth date", text: $birthday)
+                                ProfileDropdown(title: "Preferred Language", options: languages, selection: $preferredLanguage)
                             }
+                        }
 
-                            Toggle("Client allows saved preferences and purchase history visibility", isOn: $consentAccepted)
-                                .font(.headline.weight(.bold))
-                                .tint(Theme.gold)
+                        ProfileFormSection(title: "Membership") {
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileReadOnlyRow(title: "Tier (Auto)", value: "Normal")
+                                ProfileReadOnlyRow(title: "Reward Points", value: "0")
+                                ProfileReadOnlyRow(title: "Lifetime Spend", value: "Rs. 0")
+                            }
+                        }
+
+                        ProfileFormSection(title: "Shopping Preferences") {
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileDropdown(title: "Occasion", options: occasions, selection: $occasion)
+                                ProfileDropdown(title: "Budget", options: budgets, selection: $budget)
+                                ProfileDropdown(title: "Style", options: styles, selection: $preferredStyle)
+                                ProfileDropdown(title: "Material", options: materials, selection: $materialPreference)
+                                ProfileDropdown(title: "Size", options: sizes, selection: $size)
+                                ProfileDropdown(title: "Preferred Color", options: colors, selection: $colorPreference)
+                                ProfileDropdown(title: "Preferred Category", options: categories, selection: $preferredCategory)
+                                ProfileDropdown(title: "Brand Preference", options: brands, selection: $brandPreference)
+                            }
+                        }
+
+                        ProfileFormSection(title: "Communication") {
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileDropdown(title: "Preferred Contact Method", options: contactMethods, selection: $preferredContactMethod)
+
+                                ProfileToggleRow(
+                                    title: "Marketing Consent",
+                                    subtitle: "Allow campaign and event communication",
+                                    isOn: $marketingConsent
+                                )
+
+                                ProfileToggleRow(
+                                    title: "Preference Visibility Consent",
+                                    subtitle: "Show saved preferences to sales associate",
+                                    isOn: $consentAccepted
+                                )
+                            }
+                        }
+
+                        ProfileFormSection(title: "Sales Notes") {
+                            VStack(alignment: .leading, spacing: 14) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Client Notes".uppercased())
+                                        .font(.caption.weight(.black))
+                                        .foregroundStyle(Theme.muted)
+                                    TextEditor(text: $notes)
+                                        .scrollContentBackground(.hidden)
+                                        .padding(10)
+                                        .frame(minHeight: 118)
+                                        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                                        )
+                                        .overlay(alignment: .topLeading) {
+                                            if notes.isEmpty {
+                                                Text("Add product interest, service note, or follow-up promise...")
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(Theme.muted.opacity(0.66))
+                                                    .padding(.horizontal, 16)
+                                                    .padding(.vertical, 18)
+                                            }
+                                        }
+                                }
+
+                                ProfileTextField(title: "Follow-up Date", placeholder: "Tomorrow, 4 PM or date", text: $followUpDate)
+                            }
                         }
 
                         Button {
@@ -4363,18 +4633,25 @@ private struct CreateClientProfilePanel: View {
                         .disabled(!canSave)
                         .opacity(canSave ? 1 : 0.55)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: 820, alignment: .top)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
+            .scrollIndicators(.hidden)
         }
     }
 
     private func makeProfile() -> ClientProfile {
         let name = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         let capturedPreferences = [
+            occasion,
+            budget,
             preferredStyle,
             materialPreference,
-            colorPreference
+            size,
+            colorPreference,
+            preferredCategory,
+            brandPreference
         ]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0 != "N/A" }
@@ -4387,10 +4664,15 @@ private struct CreateClientProfilePanel: View {
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             initials: initials(for: name),
             name: name,
+            email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+            birthday: birthday.trimmingCharacters(in: .whitespacesAndNewlines),
+            preferredLanguage: preferredLanguage,
+            preferredContactMethod: preferredContactMethod,
+            marketingConsent: marketingConsent,
+            followUpDate: followUpDate.trimmingCharacters(in: .whitespacesAndNewlines),
             tier: "Normal",
             lifetimePurchaseAmount: 0,
             boutique: "Mumbai",
-            lastVisit: "Today",
             status: consentAccepted ? "Preferences visible" : "Profile created - preferences hidden",
             note: resolvedNote,
             attributes: visibleAttributes,
@@ -4404,19 +4686,40 @@ private struct CreateClientProfilePanel: View {
                     icon: "heart",
                     title: capturedPreferences.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
                     subtitle: capturedPreferences.isEmpty ? "No optional preference data saved" : (consentAccepted ? preferenceSummary : "Other preferences require client consent")
+                ),
+                ClientTask(
+                    icon: marketingConsent ? "megaphone.fill" : "bell.slash",
+                    title: marketingConsent ? "Marketing consent on" : "Marketing consent off",
+                    subtitle: marketingConsent ? "Client can receive campaigns by \(preferredContactMethod)" : "Do not send marketing campaigns"
                 )
-            ]
+            ] + followUpTasks()
         )
     }
 
     private func profileAttributes() -> [ClientAttribute] {
         var attributes: [ClientAttribute] = []
-        appendAttribute("Size", value: size, to: &attributes)
-        appendAttribute("Style", value: preferredStyle, to: &attributes)
+        appendAttribute("Occasion", value: occasion, to: &attributes)
         appendAttribute("Budget", value: budget, to: &attributes)
-        appendAttribute("Preference", value: materialPreference, to: &attributes)
-        appendAttribute("Color", value: colorPreference, to: &attributes)
+        appendAttribute("Style", value: preferredStyle, to: &attributes)
+        appendAttribute("Material", value: materialPreference, to: &attributes)
+        appendAttribute("Size", value: size, to: &attributes)
+        appendAttribute("Preferred Color", value: colorPreference, to: &attributes)
+        appendAttribute("Preferred Category", value: preferredCategory, to: &attributes)
+        appendAttribute("Brand Preference", value: brandPreference, to: &attributes)
         return attributes
+    }
+
+    private func followUpTasks() -> [ClientTask] {
+        let followUp = followUpDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !followUp.isEmpty else { return [] }
+
+        return [
+            ClientTask(
+                icon: "calendar.badge.clock",
+                title: "Follow-up",
+                subtitle: followUp
+            )
+        ]
     }
 
     private func appendAttribute(
@@ -4454,6 +4757,52 @@ private struct ProfileFormSection<Content: View>: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Theme.line.opacity(0.45), lineWidth: 1)
         )
+    }
+}
+
+private struct ProfileReadOnlyRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.caption.weight(.black))
+                .foregroundStyle(Theme.muted)
+
+            Spacer()
+
+            Text(value)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 50)
+        .background(Theme.selected.opacity(0.66), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct ProfileToggleRow: View {
+    let title: String
+    let subtitle: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                Text(subtitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+            }
+        }
+        .tint(Theme.gold)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 58)
+        .background(.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 

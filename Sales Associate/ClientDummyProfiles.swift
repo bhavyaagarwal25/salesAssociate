@@ -8,7 +8,6 @@ extension ClientProfile {
             tier: "Normal", // teir for vip purpose there is normal teir, silver tier,platinum,gold,diamond
             lifetimePurchaseAmount: 544_000,
             boutique: "Mumbai",
-            lastVisit: "18 Jun",
             status: "Consent verified",
             note: "Prefers compact evening pieces, champagne tones, and gold hardware.",
             attributes: [
@@ -36,7 +35,6 @@ extension ClientProfile {
             tier: "Normal",
             lifetimePurchaseAmount: 142_000,
             boutique: "Mumbai",
-            lastVisit: "20 Jun",
             status: "Consent verified",
             note: "Looking for an elegant evening clutch and rose-gold details.",
             attributes: [
@@ -63,7 +61,6 @@ extension ClientProfile {
             tier: "Normal",
             lifetimePurchaseAmount: 420_000,
             boutique: "Mumbai",
-            lastVisit: "New",
             status: "Guest context only",
             note: "Exploring diamond necklaces for a family event; no full profile consent yet.",
             attributes: [
@@ -90,7 +87,6 @@ extension ClientProfile {
             tier: "Normal",
             lifetimePurchaseAmount: 281_000,
             boutique: "Mumbai",
-            lastVisit: "12 Jun",
             status: "Consent verified",// it shows that user gave their consent or not
             note: "Prefers quiet luxury, pearl tones, and lightweight handbags for travel.",
             attributes: [
@@ -118,7 +114,6 @@ extension ClientProfile {
             tier: "Normal",
             lifetimePurchaseAmount: 475_000,
             boutique: "Mumbai",
-            lastVisit: "10 Jun",
             status: "Consent verified",
             note: "Buying a premium gift; prefers watches and black leather details.",
             attributes: [
@@ -145,7 +140,6 @@ extension ClientProfile {
             tier: "Normal",
             lifetimePurchaseAmount: 184_000,
             boutique: "Mumbai",
-            lastVisit: "08 Jun",
             status: "Consent verified",
             note: "Likes champagne satin, crystal hardware, and compact occasion bags.",
             attributes: [

@@ -78,6 +78,22 @@ struct SellingSessionState: Equatable {
         cartQuantitiesByProductID[product.id, default: 0] += resolvedQuantity
     }
 
+    mutating func setCartQuantity(_ quantity: Int, for product: SalesProduct) {
+        let resolvedQuantity = max(1, quantity)
+        if !cartProductIDs.contains(product.id) {
+            cartProductIDs.append(product.id)
+        }
+        cartQuantitiesByProductID[product.id] = resolvedQuantity
+    }
+
+    mutating func incrementCartQuantity(for product: SalesProduct) {
+        setCartQuantity(quantity(for: product) + 1, for: product)
+    }
+
+    mutating func decrementCartQuantity(for product: SalesProduct) {
+        setCartQuantity(max(1, quantity(for: product) - 1), for: product)
+    }
+
     mutating func moveWishlistToCart() {
         for productID in wishlistProductIDs {
             if !cartProductIDs.contains(productID) {
