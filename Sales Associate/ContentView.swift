@@ -38,6 +38,9 @@ struct ContentView: View {
                 }
             )
             .transition(.opacity)
+            .task {
+                await syncProfilesWithSupabase()
+            }
         } else {
             LoginView { dashboard in
                 withAnimation(.easeInOut(duration: 0.25)) {
@@ -45,6 +48,31 @@ struct ContentView: View {
                 }
             }
             .transition(.opacity)
+        }
+    }
+
+    private func syncProfilesWithSupabase() async {
+        print("Supabase Sync: Starting sync...")
+        do {
+            let dbProfiles = try await SupabaseDBService.shared.fetchProfiles()
+            print("Supabase Sync: Fetched \(dbProfiles.count) profiles from DB.")
+            if dbProfiles.isEmpty {
+                let localProfiles = ClientProfileJSONStore.loadProfiles()
+                print("Supabase Sync: DB is empty. Uploading \(localProfiles.count) local profiles for migration...")
+                if !localProfiles.isEmpty {
+                    try await SupabaseDBService.shared.uploadBatchProfiles(localProfiles)
+                    print("Supabase Sync: Migration successful!")
+                }
+            } else {
+                await MainActor.run {
+                    self.clientProfiles = dbProfiles
+                    ClientProfileJSONStore.saveProfiles(dbProfiles)
+                    print("Supabase Sync: Local state updated with DB profiles.")
+                }
+            }
+        } catch {
+            print("Supabase Sync ERROR: \(error)")
+            print("Supabase Sync ERROR Details: \(error.localizedDescription)")
         }
     }
 }
@@ -797,8 +825,17 @@ struct TodayDashboardView: View {
         ClientProfileJSONStore.saveProfiles(clientProfiles)
         recentlyViewedClients.removeAll { $0.id == profile.id }
         recentlyViewedClients.insert(profile, at: 0)
-    }
-}
+        
+        Task {
+            do {
+                try await SupabaseDBService.shared.upsertProfile(profile)
+            } catch {
+                #if DEBUG
+                print("Failed to sync new profile to Supabase: \(error)")
+                #endif
+            }
+        }
+    }}
 
 enum SalesAssociateTab: String, CaseIterable, Identifiable {
     case today = "Today"
@@ -1319,6 +1356,16 @@ private struct ClientelingContent: View {
         ClientProfileJSONStore.saveProfiles(clientProfiles)
         rememberRecentlyViewed(updatedClient)
         selectedClient = updatedClient
+        
+        Task {
+            do {
+                try await SupabaseDBService.shared.upsertProfile(updatedClient)
+            } catch {
+                #if DEBUG
+                print("Failed to sync updated profile to Supabase: \(error)")
+                #endif
+            }
+        }
     }
 }
 
