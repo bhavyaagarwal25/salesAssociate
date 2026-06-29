@@ -441,6 +441,16 @@ struct LoginView: View {
                     return
                 }
 
+                // Check if user is in the User database table
+                let isRegistered = await SupabaseDBService.shared.isUserRegistered(email: cleanEmail)
+                guard isRegistered else {
+                    await MainActor.run {
+                        isAuthenticating = false
+                        errorMessage = "Access Denied: You are not authorized as a sales associate."
+                    }
+                    return
+                }
+
                 // Supabase Auth call
                 let session = try await SupabaseAuthService.shared.login(email: cleanEmail, password: cleanPasscode)
                 

@@ -88,4 +88,31 @@ class SupabaseDBService {
             throw URLError(.badServerResponse)
         }
     }
+    
+    /// Checks if a sales associate email is registered in the database User table.
+    func isUserRegistered(email: String) async -> Bool {
+        let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let url = URL(string: "\(baseURL)/User?Email=eq.\(cleanEmail)") else {
+            return false
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return false
+            }
+            
+            if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                return !jsonArray.isEmpty
+            }
+            return false
+        } catch {
+            return false
+        }
+    }
 }
