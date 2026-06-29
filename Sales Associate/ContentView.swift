@@ -92,6 +92,7 @@ struct LoginView: View {
     @State private var confirmNewPassword: String = ""
     @State private var currentAccessToken: String = ""
     @State private var tempUserEmail: String = ""
+    @State private var tempAuthUserID: String = ""
     @State private var tempUserMetadata: UserMetadata? = nil
     @State private var isNewPasswordVisible: Bool = false
     @State private var isConfirmPasswordVisible: Bool = false
@@ -469,6 +470,7 @@ struct LoginView: View {
                     if !passwordChanged {
                         currentAccessToken = session.accessToken
                         tempUserEmail = cleanEmail
+                        tempAuthUserID = session.user.id.uuidString
                         tempUserMetadata = session.user.userMetadata
                         withAnimation {
                             changePasswordMode = true
@@ -516,6 +518,9 @@ struct LoginView: View {
         Task {
             do {
                 let _ = try await SupabaseAuthService.shared.changePassword(accessToken: currentAccessToken, newPassword: cleanPassword)
+                
+                // Update isActive and authUserID in the User table in Supabase
+                try await SupabaseDBService.shared.activateUser(email: tempUserEmail, authUserID: tempAuthUserID, accessToken: currentAccessToken)
                 
                 // Fetch the real-time database profile
                 let dbAssociate = await fetchAssociateProfile(email: tempUserEmail)

@@ -137,6 +137,48 @@ class SupabaseDBService {
         let users = try JSONDecoder().decode([DBUser].self, from: data)
         return users.first
     }
+    
+    /// Updates the user's active status and sets authUserID in the User table in Supabase.
+    func activateUser(email: String, authUserID: String, accessToken: String) async throws {
+        let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let url = URL(string: "\(baseURL)/User?Email=eq.\(cleanEmail)") else {
+            throw URLError(.badURL)
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=representation", forHTTPHeaderField: "Prefer")
+        
+        let body: [String: Any] = [
+            "isActive": true,
+            "authUserID": authUserID
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        
+        let responseString = String(data: data, encoding: .utf8) ?? ""
+        print("activateUser Status: \(httpResponse.statusCode), Response: \(responseString)")
+        
+        if !(httpResponse.statusCode == 200 || httpResponse.statusCode == 201 || httpResponse.statusCode == 204) {
+            throw URLError(.badServerResponse)
+        }
+        
+        if responseString.trimmingCharacters(in: .whitespacesAndNewlines) == "[]" {
+            throw NSError(
+                domain: "SupabaseDBService",
+                code: 403,
+                userInfo: [NSLocalizedDescriptionKey: "Update blocked by Row Level Security (RLS) policy. 0 rows updated."]
+            )
+        }
+    }
 }
 
 struct DBUser: Codable {
