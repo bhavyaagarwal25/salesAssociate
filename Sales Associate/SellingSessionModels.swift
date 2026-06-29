@@ -4,6 +4,7 @@ enum SellingSessionPanel: Equatable {
     case wishlist
     case cart
     case createProfile
+    case fulfillment
 }
 
 struct SellingSessionState: Equatable {
@@ -45,7 +46,7 @@ struct SellingSessionState: Equatable {
 
     mutating func startForClient(_ client: ClientProfile) {
         guestID = nil
-        wishlistProductIDs = []
+        wishlistProductIDs = client.wishlistProductIDs
         cartProductIDs = []
         cartQuantitiesByProductID = [:]
         createdClient = client
@@ -75,6 +76,22 @@ struct SellingSessionState: Equatable {
             cartProductIDs.append(product.id)
         }
         cartQuantitiesByProductID[product.id, default: 0] += resolvedQuantity
+    }
+
+    mutating func setCartQuantity(_ quantity: Int, for product: SalesProduct) {
+        let resolvedQuantity = max(1, quantity)
+        if !cartProductIDs.contains(product.id) {
+            cartProductIDs.append(product.id)
+        }
+        cartQuantitiesByProductID[product.id] = resolvedQuantity
+    }
+
+    mutating func incrementCartQuantity(for product: SalesProduct) {
+        setCartQuantity(quantity(for: product) + 1, for: product)
+    }
+
+    mutating func decrementCartQuantity(for product: SalesProduct) {
+        setCartQuantity(max(1, quantity(for: product) - 1), for: product)
     }
 
     mutating func moveWishlistToCart() {

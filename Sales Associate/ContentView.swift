@@ -1,8 +1,9 @@
 import SwiftUI
+import MapKit
+import Combine
 
 struct ContentView: View {
     @State private var loggedInDashboard: SalesAssociateDashboard? = nil
-    @State private var accessToken: String = ""
     @State private var selectedTab: SalesAssociateTab = .today
     @State private var navigationMode: SalesNavigationMode = .sidebar
     @State private var recentlyViewedClients: [ClientProfile] = []
@@ -31,46 +32,53 @@ struct ContentView: View {
                 onLogout: {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         loggedInDashboard = nil
-                        accessToken = ""
                         selectedTab = .today
                         sellingSession = SellingSessionState()
-                        clientProfiles = []
                     }
-                },
-                accessToken: accessToken
+                }
             )
             .transition(.opacity)
+            .task {
+                await syncProfilesWithSupabase()
+            }
         } else {
-            LoginView { dashboard, token in
+            LoginView { dashboard in
                 withAnimation(.easeInOut(duration: 0.25)) {
-                    self.accessToken = token
-                    self.loggedInDashboard = dashboard
-                    fetchClientsFromSupabase()
+                    loggedInDashboard = dashboard
                 }
             }
             .transition(.opacity)
         }
     }
 
-    private func fetchClientsFromSupabase() {
-        guard !accessToken.isEmpty else { return }
-        let token = accessToken
-        Task {
-            do {
-                let fetched = try await SupabaseAuthService.shared.fetchClients(accessToken: token)
-                await MainActor.run {
-                    self.clientProfiles = fetched
-                    ClientProfileJSONStore.saveProfiles(fetched)
+    private func syncProfilesWithSupabase() async {
+        print("Supabase Sync: Starting sync...")
+        do {
+            let dbProfiles = try await SupabaseDBService.shared.fetchProfiles()
+            print("Supabase Sync: Fetched \(dbProfiles.count) profiles from DB.")
+            if dbProfiles.isEmpty {
+                let localProfiles = ClientProfileJSONStore.loadProfiles()
+                print("Supabase Sync: DB is empty. Uploading \(localProfiles.count) local profiles for migration...")
+                if !localProfiles.isEmpty {
+                    try await SupabaseDBService.shared.uploadBatchProfiles(localProfiles)
+                    print("Supabase Sync: Migration successful!")
                 }
-            } catch {
-                print("Failed to fetch clients from Supabase: \(error)")
+            } else {
+                await MainActor.run {
+                    self.clientProfiles = dbProfiles
+                    ClientProfileJSONStore.saveProfiles(dbProfiles)
+                    print("Supabase Sync: Local state updated with DB profiles.")
+                }
             }
+        } catch {
+            print("Supabase Sync ERROR: \(error)")
+            print("Supabase Sync ERROR Details: \(error.localizedDescription)")
         }
     }
 }
 
 struct LoginView: View {
-    let onLoginSuccess: (SalesAssociateDashboard, String) -> Void
+    let onLoginSuccess: (SalesAssociateDashboard) -> Void
 
     @State private var email: String = ""
     @State private var passcode: String = ""
@@ -391,7 +399,7 @@ struct LoginView: View {
                     .shadow(color: Theme.ink.opacity(0.04), radius: 24, x: 0, y: 12)
                 }
 
-                Spacer()
+
             }
             .padding(.vertical, 30)
         }
@@ -423,7 +431,7 @@ struct LoginView: View {
                     let matchedDashboard = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == cleanEmail })!
                     await MainActor.run {
                         isAuthenticating = false
-                        onLoginSuccess(matchedDashboard, "")
+                        onLoginSuccess(matchedDashboard)
                     }
                     return
                 }
@@ -446,7 +454,7 @@ struct LoginView: View {
                         }
                     } else {
                         let dashboard = getDashboard(for: cleanEmail, metadata: session.user.userMetadata)
-                        onLoginSuccess(dashboard, session.accessToken)
+                        onLoginSuccess(dashboard)
                     }
                 }
             } catch {
@@ -488,7 +496,7 @@ struct LoginView: View {
                     withAnimation {
                         changePasswordMode = false
                     }
-                    onLoginSuccess(dashboard, currentAccessToken)
+                    onLoginSuccess(dashboard)
                 }
             } catch {
                 await MainActor.run {
@@ -507,30 +515,46 @@ struct LoginView: View {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             isAuthenticating = false
-            onLoginSuccess(dashboard, "")
+            onLoginSuccess(dashboard)
         }
     }
 
     private func getDashboard(for email: String, metadata: UserMetadata?) -> SalesAssociateDashboard {
         let lowercasedEmail = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let sampleDashboard = SalesAssociateDashboard.samples.first { $0.associate.email.lowercased() == lowercasedEmail }
         
-        if let sample = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == lowercasedEmail }) {
-            return sample
+        if let sampleDashboard {
+            guard metadataHasAssociateData(metadata) else {
+                return sampleDashboard
+            }
+
+            let associate = makeAssociateProfile(
+                for: email,
+                metadata: metadata,
+                fallback: sampleDashboard.associate
+            )
+
+            return SalesAssociateDashboard(
+                associate: associate,
+                monthlyGoal: sampleDashboard.monthlyGoal,
+                priorityItems: sampleDashboard.priorityItems,
+                quickActions: sampleDashboard.quickActions,
+                metrics: sampleDashboard.metrics,
+                weeklySales: sampleDashboard.weeklySales
+            )
         }
         
-        let name = metadata?.name ?? email.components(separatedBy: "@").first?.capitalized ?? "Sales Associate"
-        let initials = metadata?.initials ?? String(name.split(separator: " ").compactMap { $0.first }.map { String($0) }.joined().prefix(2)).uppercased()
-        
-        let associate = AssociateProfile(
-            initials: initials.isEmpty ? "SA" : initials,
-            name: name,
-            role: metadata?.role ?? "Sales Associate",
-            boutique: metadata?.boutique ?? "South Mumbai",
+        let fallbackAssociate = AssociateProfile(
+            initials: "SA",
+            name: email.components(separatedBy: "@").first?.capitalized ?? "Sales Associate",
+            role: "Sales Associate",
+            boutique: "South Mumbai",
             email: email,
-            phone: metadata?.phone ?? "+91 98765 43210",
-            employeeID: metadata?.employeeID ?? "SA-\(Int.random(in: 1000...9999))",
-            shift: metadata?.shift ?? "Morning shift"
+            phone: "+91 98765 43210",
+            employeeID: "SA-\(abs(lowercasedEmail.hashValue % 9000) + 1000)",
+            shift: "Morning shift"
         )
+        let associate = makeAssociateProfile(for: email, metadata: metadata, fallback: fallbackAssociate)
         
         return SalesAssociateDashboard(
             associate: associate,
@@ -583,6 +607,48 @@ struct LoginView: View {
             )
         )
     }
+
+    private func metadataHasAssociateData(_ metadata: UserMetadata?) -> Bool {
+        [
+            metadata?.initials,
+            metadata?.name,
+            metadata?.role,
+            metadata?.boutique,
+            metadata?.phone,
+            metadata?.employeeID,
+            metadata?.shift
+        ]
+        .contains { nonEmpty($0) != nil }
+    }
+
+    private func makeAssociateProfile(
+        for email: String,
+        metadata: UserMetadata?,
+        fallback: AssociateProfile
+    ) -> AssociateProfile {
+        let name = nonEmpty(metadata?.name) ?? fallback.name
+        let derivedInitials = String(name.split(separator: " ").compactMap { $0.first }.map { String($0) }.joined().prefix(2)).uppercased()
+        let initials = nonEmpty(metadata?.initials) ?? (derivedInitials.isEmpty ? fallback.initials : derivedInitials)
+
+        return AssociateProfile(
+            initials: initials,
+            name: name,
+            role: nonEmpty(metadata?.role) ?? fallback.role,
+            boutique: nonEmpty(metadata?.boutique) ?? fallback.boutique,
+            email: email,
+            phone: nonEmpty(metadata?.phone) ?? fallback.phone,
+            employeeID: nonEmpty(metadata?.employeeID) ?? fallback.employeeID,
+            shift: nonEmpty(metadata?.shift) ?? fallback.shift
+        )
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let cleaned = value?.trimmingCharacters(in: .whitespacesAndNewlines), !cleaned.isEmpty else {
+            return nil
+        }
+
+        return cleaned
+    }
 }
 
 enum SalesNavigationMode: Equatable {
@@ -604,7 +670,6 @@ struct TodayDashboardView: View {
     @Binding var sellingSession: SellingSessionState
     @State private var isAssociateProfilePresented = false
     let onLogout: () -> Void
-    let accessToken: String
 
     var body: some View {
         GeometryReader { proxy in
@@ -659,8 +724,7 @@ struct TodayDashboardView: View {
                 products: products,
                 onStartGuestClient: startGuestSelling,
                 onBuildCuratedCart: startClientSelling,
-                recentlyViewedClients: $recentlyViewedClients,
-                accessToken: accessToken
+                recentlyViewedClients: $recentlyViewedClients
             )
         case .sell:
             SellContent(
@@ -702,20 +766,17 @@ struct TodayDashboardView: View {
         ClientProfileJSONStore.saveProfiles(clientProfiles)
         recentlyViewedClients.removeAll { $0.id == profile.id }
         recentlyViewedClients.insert(profile, at: 0)
-
-        let token = accessToken
-        if !token.isEmpty {
-            Task {
-                do {
-                    try await SupabaseAuthService.shared.saveClient(accessToken: token, client: profile)
-                    print("Successfully saved created profile to Supabase.")
-                } catch {
-                    print("Failed to save created profile to Supabase: \(error)")
-                }
+        
+        Task {
+            do {
+                try await SupabaseDBService.shared.upsertProfile(profile)
+            } catch {
+                #if DEBUG
+                print("Failed to sync new profile to Supabase: \(error)")
+                #endif
             }
         }
-    }
-}
+    }}
 
 enum SalesAssociateTab: String, CaseIterable, Identifiable {
     case today = "Today"
@@ -914,9 +975,9 @@ private struct TopNavigationItem: View {
                 .lineLimit(1)
                 .padding(.horizontal, 16)
                 .frame(height: 44)
-                .foregroundStyle(isSelected ? .white : Theme.muted)
+                .foregroundStyle(isSelected ? Theme.gold : Theme.muted)
                 .background(
-                    isSelected ? AnyShapeStyle(Theme.bestBar) : AnyShapeStyle(.clear),
+                    isSelected ? AnyShapeStyle(Theme.selected) : AnyShapeStyle(Color.clear),
                     in: Capsule()
                 )
         }
@@ -1145,7 +1206,6 @@ private struct ClientelingContent: View {
     let onBuildCuratedCart: (ClientProfile) -> Void
 
     @Binding var recentlyViewedClients: [ClientProfile]
-    let accessToken: String
 
     @State private var query = ""
     @State private var selectedClient: ClientProfile?
@@ -1237,16 +1297,14 @@ private struct ClientelingContent: View {
         ClientProfileJSONStore.saveProfiles(clientProfiles)
         rememberRecentlyViewed(updatedClient)
         selectedClient = updatedClient
-
-        let token = accessToken
-        if !token.isEmpty {
-            Task {
-                do {
-                    try await SupabaseAuthService.shared.saveClient(accessToken: token, client: updatedClient)
-                    print("Successfully updated client profile in Supabase.")
-                } catch {
-                    print("Failed to update client profile in Supabase: \(error)")
-                }
+        
+        Task {
+            do {
+                try await SupabaseDBService.shared.upsertProfile(updatedClient)
+            } catch {
+                #if DEBUG
+                print("Failed to sync updated profile to Supabase: \(error)")
+                #endif
             }
         }
     }
@@ -1436,6 +1494,20 @@ private struct ClientDetailCard: View {
         client.allowsPreferenceVisibility ? client.visiblePreferenceAttributes : []
     }
 
+    private var visibleDefaultDeliveryAddress: String? {
+        guard client.allowsPreferenceVisibility else { return nil }
+
+        let address = client.defaultDeliveryAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return address.isEmpty ? nil : address
+    }
+
+    private var visibleDeliveryAddressDetail: String? {
+        guard client.allowsPreferenceVisibility else { return nil }
+
+        let detail = client.deliveryAddressDetail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return detail.isEmpty ? nil : detail
+    }
+
     private var wishlistProducts: [SalesProduct] {
         let wishlistIDs = Set(client.wishlistProductIDs)
         return products.filter { wishlistIDs.contains($0.id) }
@@ -1495,10 +1567,15 @@ private struct ClientDetailCard: View {
                 phone: client.phone,
                 initials: client.initials,
                 name: client.name,
+                email: client.email,
+                birthday: client.birthday,
+                preferredLanguage: client.preferredLanguage,
+                preferredContactMethod: client.preferredContactMethod,
+                marketingConsent: client.marketingConsent,
+                followUpDate: client.followUpDate,
                 tier: client.tier,
                 lifetimePurchaseAmount: client.lifetimePurchaseAmount,
                 boutique: client.boutique,
-                lastVisit: client.lastVisit,
                 status: consentStatus(
                     preferenceVisibilityAllowed: preferenceVisibilityAllowed,
                     purchaseHistoryAllowed: purchaseHistoryAllowed
@@ -1507,7 +1584,9 @@ private struct ClientDetailCard: View {
                 attributes: client.attributes,
                 tasks: updatedTasks,
                 purchaseHistory: client.purchaseHistory,
-                wishlistProductIDs: client.wishlistProductIDs
+                wishlistProductIDs: client.wishlistProductIDs,
+                defaultDeliveryAddress: client.defaultDeliveryAddress,
+                deliveryAddressDetail: client.deliveryAddressDetail
             )
         )
     }
@@ -1580,16 +1659,23 @@ private struct ClientDetailCard: View {
                 phone: client.phone,
                 initials: client.initials,
                 name: client.name,
+                email: client.email,
+                birthday: client.birthday,
+                preferredLanguage: client.preferredLanguage,
+                preferredContactMethod: client.preferredContactMethod,
+                marketingConsent: client.marketingConsent,
+                followUpDate: client.followUpDate,
                 tier: client.tier,
                 lifetimePurchaseAmount: client.lifetimePurchaseAmount,
                 boutique: client.boutique,
-                lastVisit: client.lastVisit,
                 status: client.status,
                 note: note,
                 attributes: retainedAttributes + preferenceAttributes,
                 tasks: updatedTasks,
                 purchaseHistory: client.purchaseHistory,
-                wishlistProductIDs: client.wishlistProductIDs
+                wishlistProductIDs: client.wishlistProductIDs,
+                defaultDeliveryAddress: client.defaultDeliveryAddress,
+                deliveryAddressDetail: client.deliveryAddressDetail
             )
         )
     }
@@ -1659,7 +1745,7 @@ private struct ClientDetailCard: View {
                         .lineLimit(2)
                         .minimumScaleFactor(0.78)
 
-                    Text("\(client.boutique) • last visit \(client.lastVisit) • \(client.status.lowercased())")
+                    Text("\(client.boutique) • \(client.status.lowercased())")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.muted)
                         .lineLimit(2)
@@ -1680,6 +1766,13 @@ private struct ClientDetailCard: View {
                 }
             } else if !hasInsightConsent {
                 ClientRestrictedInsightNotice()
+            }
+
+            if let visibleDefaultDeliveryAddress {
+                ClientDeliveryAddressCard(
+                    address: visibleDefaultDeliveryAddress,
+                    detail: visibleDeliveryAddressDetail
+                )
             }
 
             if hasInsightConsent, let visibleClientNote {
@@ -1840,6 +1933,48 @@ private struct ClientAttributeTile: View {
     }
 }
 
+private struct ClientDeliveryAddressCard: View {
+    let address: String
+    let detail: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "location.fill")
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 44, height: 44)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Default Delivery Address".uppercased())
+                    .font(.caption.weight(.black))
+                    .tracking(1.1)
+                    .foregroundStyle(Theme.muted)
+
+                Text(address)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let detail {
+                    Text(detail)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.muted)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.60), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
 private struct ClientRestrictedInsightNotice: View {
     var body: some View {
         Label {
@@ -1847,7 +1982,7 @@ private struct ClientRestrictedInsightNotice: View {
                 Text("Other preferences are hidden until clients consent")
                     .font(.headline.weight(.black))
                     .foregroundStyle(Theme.ink)
-                Text("Purchase history, wishlist, style notes, and detailed preferences will appear after consent is captured.")
+                Text("Purchase history, wishlist, delivery address, style notes, and detailed preferences will appear after consent is captured.")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.muted)
             }
@@ -2521,12 +2656,31 @@ private struct SellContent: View {
                         subtitle: "Cart for \(session.displayName)",
                         emptyTitle: "Cart is empty",
                         emptySubtitle: "Use Add to Cart from product details to build this order.",
-                        primaryActionTitle: "Proceed to Pay",
-                        primaryActionIcon: "creditcard",
+                        primaryActionTitle: "Proceed",
+                        primaryActionIcon: "arrow.right.circle",
                         quantityForProduct: { product in
                             session.quantity(for: product)
                         },
+                        onIncrementQuantity: { product in
+                            session.incrementCartQuantity(for: product)
+                        },
+                        onDecrementQuantity: { product in
+                            session.decrementCartQuantity(for: product)
+                        },
                         onPrimaryAction: {
+                            selectedProduct = nil
+                            session.activePanel = .fulfillment
+                        }
+                    )
+                } else if session.activePanel == .fulfillment {
+                    CheckoutFulfillmentPanel(
+                        client: session.createdClient,
+                        onBack: {
+                            session.activePanel = .cart
+                        },
+                        onSaveDefaultAddress: { updatedClient in
+                            session.createdClient = updatedClient
+                            onCreateProfile(updatedClient)
                         }
                     )
                 } else if session.activePanel == .createProfile {
@@ -2642,6 +2796,8 @@ private struct SellContent: View {
         primaryActionTitle: String,
         primaryActionIcon: String,
         quantityForProduct: @escaping (SalesProduct) -> Int?,
+        onIncrementQuantity: ((SalesProduct) -> Void)? = nil,
+        onDecrementQuantity: ((SalesProduct) -> Void)? = nil,
         onPrimaryAction: @escaping () -> Void
     ) -> some View {
         HStack(alignment: .top, spacing: 18) {
@@ -2656,6 +2812,8 @@ private struct SellContent: View {
                 primaryActionTitle: primaryActionTitle,
                 primaryActionIcon: primaryActionIcon,
                 quantityForProduct: quantityForProduct,
+                onIncrementQuantity: onIncrementQuantity,
+                onDecrementQuantity: onDecrementQuantity,
                 onSelectProduct: { product in
                     selectedProduct = product
                 },
@@ -2782,20 +2940,28 @@ private struct ToolbarPillButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            ZStack(alignment: .topTrailing) {
                 Image(systemName: icon)
                     .font(.title2.weight(.black))
                     .foregroundStyle(Theme.ink)
-                    .frame(width: 30, height: 54)
+                    .frame(width: 54, height: 54)
 
                 if showsCount, count > 0 {
                     Text("\(count)")
-                        .font(.headline.weight(.black))
-                        .foregroundStyle(Theme.gold)
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(Theme.goldGradient, in: Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(.white.opacity(0.92), lineWidth: 1.5)
+                        )
+                        .offset(x: 5, y: 3)
                         .accessibilityHidden(true)
                 }
             }
-            .frame(minWidth: 54, minHeight: 54)
+            .frame(width: 54, height: 54)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showsCount && count > 0 ? "\(title), \(count) items" : title)
@@ -3569,6 +3735,486 @@ private struct SellProductDetailCard: View {
     }
 }
 
+private enum CheckoutFulfillmentMethod: String, CaseIterable, Identifiable {
+    case pickup
+    case delivery
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .pickup:
+            return "Take from Store"
+        case .delivery:
+            return "Deliver to Address"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .pickup:
+            return "Client will take products from the boutique now."
+        case .delivery:
+            return "Search the delivery address before payment."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .pickup:
+            return "bag.fill"
+        case .delivery:
+            return "shippingbox.fill"
+        }
+    }
+}
+
+private struct AddressSuggestion: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+
+    var displayText: String {
+        let cleanSubtitle = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSubtitle.isEmpty else { return title }
+        return "\(title), \(cleanSubtitle)"
+    }
+}
+
+private final class AddressSearchCompleter: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    @Published var query = "" {
+        didSet {
+            let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedQuery.count >= 2 else {
+                suggestions = []
+                completer.queryFragment = ""
+                return
+            }
+
+            completer.queryFragment = trimmedQuery
+        }
+    }
+
+    @Published var suggestions: [AddressSuggestion] = []
+
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = .address
+        completer.region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 19.0760, longitude: 72.8777),
+            span: MKCoordinateSpan(latitudeDelta: 0.70, longitudeDelta: 0.70)
+        )
+    }
+
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        let updatedSuggestions = completer.results.prefix(6).map {
+            AddressSuggestion(title: $0.title, subtitle: $0.subtitle)
+        }
+
+        DispatchQueue.main.async {
+            self.suggestions = updatedSuggestions
+        }
+    }
+
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        DispatchQueue.main.async {
+            self.suggestions = []
+        }
+    }
+}
+
+private struct CheckoutFulfillmentPanel: View {
+    let client: ClientProfile?
+    let onBack: () -> Void
+    let onSaveDefaultAddress: (ClientProfile) -> Void
+
+    @State private var method: CheckoutFulfillmentMethod = .pickup
+    @StateObject private var addressCompleter = AddressSearchCompleter()
+    @State private var buildingDetail = ""
+    @State private var shouldSaveDefaultAddress = false
+    @State private var showsAddressSuggestions = false
+    @State private var didContinueToPayment = false
+    @State private var didPrepareDefaultAddress = false
+
+    private var resolvedAddress: String {
+        addressCompleter.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var resolvedBuildingDetail: String {
+        buildingDetail.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canProceedToPay: Bool {
+        method == .pickup || !resolvedAddress.isEmpty
+    }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 14) {
+                    ClientPanelBackButton(action: onBack)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Fulfillment")
+                            .font(.title2.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                        Text("Choose how the client wants to take the products.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+
+                    Text(client?.name ?? "Guest")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Theme.selected, in: Capsule())
+                }
+
+                HStack(spacing: 14) {
+                    ForEach(CheckoutFulfillmentMethod.allCases) { option in
+                        FulfillmentMethodButton(
+                            option: option,
+                            isSelected: method == option
+                        ) {
+                            method = option
+                            didContinueToPayment = false
+                        }
+                    }
+                }
+
+                if method == .pickup {
+                    PickupSummaryCard()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    DeliveryAddressSection(
+                        query: Binding(
+                            get: { addressCompleter.query },
+                            set: { newValue in
+                                addressCompleter.query = newValue
+                                showsAddressSuggestions = true
+                                didContinueToPayment = false
+                            }
+                        ),
+                        buildingDetail: $buildingDetail,
+                        shouldSaveDefaultAddress: $shouldSaveDefaultAddress,
+                        suggestions: addressCompleter.suggestions,
+                        showsSuggestions: showsAddressSuggestions,
+                        defaultAddress: client?.defaultDeliveryAddress,
+                        onUseDefaultAddress: useDefaultAddress,
+                        onSelectSuggestion: selectAddressSuggestion
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                Spacer(minLength: 0)
+
+                if didContinueToPayment {
+                    Label("Ready to continue payment at POS", systemImage: "checkmark.seal.fill")
+                        .font(.subheadline.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.selected.opacity(0.66), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+
+                Button {
+                    saveDefaultAddressIfNeeded()
+                    didContinueToPayment = true
+                } label: {
+                    Label("Proceed to Pay", systemImage: "creditcard")
+                        .font(.headline.weight(.black))
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .foregroundStyle(.white)
+                        .background(Theme.goldGradient, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canProceedToPay)
+                .opacity(canProceedToPay ? 1 : 0.55)
+            }
+            .frame(maxWidth: .infinity, minHeight: 560, alignment: .topLeading)
+            .animation(.snappy(duration: 0.24), value: method)
+            .onAppear(perform: prepareDefaultAddress)
+        }
+    }
+
+    private func prepareDefaultAddress() {
+        guard !didPrepareDefaultAddress else { return }
+        didPrepareDefaultAddress = true
+
+        guard let client else { return }
+        if let defaultAddress = client.defaultDeliveryAddress, !defaultAddress.isEmpty {
+            addressCompleter.query = defaultAddress
+        }
+        buildingDetail = client.deliveryAddressDetail ?? ""
+    }
+
+    private func useDefaultAddress() {
+        guard let client, let defaultAddress = client.defaultDeliveryAddress else { return }
+        addressCompleter.query = defaultAddress
+        buildingDetail = client.deliveryAddressDetail ?? ""
+        shouldSaveDefaultAddress = false
+        showsAddressSuggestions = false
+        didContinueToPayment = false
+    }
+
+    private func selectAddressSuggestion(_ suggestion: AddressSuggestion) {
+        addressCompleter.query = suggestion.displayText
+        showsAddressSuggestions = false
+        didContinueToPayment = false
+    }
+
+    private func saveDefaultAddressIfNeeded() {
+        guard method == .delivery,
+              shouldSaveDefaultAddress,
+              let client,
+              !resolvedAddress.isEmpty
+        else {
+            return
+        }
+
+        onSaveDefaultAddress(
+            ClientProfile(
+                id: client.id,
+                phone: client.phone,
+                initials: client.initials,
+                name: client.name,
+                email: client.email,
+                birthday: client.birthday,
+                preferredLanguage: client.preferredLanguage,
+                preferredContactMethod: client.preferredContactMethod,
+                marketingConsent: client.marketingConsent,
+                followUpDate: client.followUpDate,
+                tier: client.tier,
+                lifetimePurchaseAmount: client.lifetimePurchaseAmount,
+                boutique: client.boutique,
+                status: client.status,
+                note: client.note,
+                attributes: client.attributes,
+                tasks: client.tasks,
+                purchaseHistory: client.purchaseHistory,
+                wishlistProductIDs: client.wishlistProductIDs,
+                defaultDeliveryAddress: resolvedAddress,
+                deliveryAddressDetail: resolvedBuildingDetail.isEmpty ? nil : resolvedBuildingDetail
+            )
+        )
+    }
+}
+
+private struct FulfillmentMethodButton: View {
+    let option: CheckoutFulfillmentMethod
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: option.icon)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(isSelected ? .white : Theme.gold)
+                    .frame(width: 44, height: 44)
+                    .background(isSelected ? .white.opacity(0.20) : Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(option.title)
+                        .font(.headline.weight(.black))
+                    Text(option.subtitle)
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .opacity(0.78)
+                }
+
+                Spacer()
+            }
+            .padding(15)
+            .frame(maxWidth: .infinity, minHeight: 102)
+            .foregroundStyle(isSelected ? .white : Theme.ink)
+            .background(isSelected ? AnyShapeStyle(Theme.goldGradient) : AnyShapeStyle(.white.opacity(0.58)), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(isSelected ? .white.opacity(0.22) : Theme.line.opacity(0.45), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PickupSummaryCard: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "storefront.fill")
+                .font(.title2.weight(.black))
+                .foregroundStyle(Theme.gold)
+                .frame(width: 58, height: 58)
+                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Store pickup selected")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                Text("The client can take the confirmed products from South Mumbai boutique after payment.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct DeliveryAddressSection: View {
+    @Binding var query: String
+    @Binding var buildingDetail: String
+    @Binding var shouldSaveDefaultAddress: Bool
+
+    let suggestions: [AddressSuggestion]
+    let showsSuggestions: Bool
+    let defaultAddress: String?
+    let onUseDefaultAddress: () -> Void
+    let onSelectSuggestion: (AddressSuggestion) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Delivery Details")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                Spacer()
+
+                if let defaultAddress, !defaultAddress.isEmpty {
+                    Button(action: onUseDefaultAddress) {
+                        Label("Use saved address", systemImage: "location.fill")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Theme.selected, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Address".uppercased())
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.muted)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                    TextField("Search delivery address", text: $query)
+                        .font(.headline.weight(.bold))
+                        .textInputAutocapitalization(.words)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 52)
+                .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                if showsSuggestions && !suggestions.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(suggestions) { suggestion in
+                            Button {
+                                onSelectSuggestion(suggestion)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "location")
+                                        .font(.subheadline.weight(.black))
+                                        .foregroundStyle(Theme.gold)
+                                        .frame(width: 34, height: 34)
+                                        .background(Theme.selected, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(suggestion.title)
+                                            .font(.subheadline.weight(.black))
+                                            .foregroundStyle(Theme.ink)
+                                            .lineLimit(1)
+                                        if !suggestion.subtitle.isEmpty {
+                                            Text(suggestion.subtitle)
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(Theme.muted)
+                                                .lineLimit(1)
+                                        }
+                                    }
+
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+
+                            if suggestion.id != suggestions.last?.id {
+                                Divider()
+                                    .overlay(Theme.line.opacity(0.36))
+                            }
+                        }
+                    }
+                    .background(.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                    )
+                }
+            }
+
+            ProfileTextField(
+                title: "Building / Flat / Floor",
+                placeholder: "optional",
+                text: $buildingDetail
+            )
+
+            Button {
+                shouldSaveDefaultAddress.toggle()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: shouldSaveDefaultAddress ? "checkmark.square.fill" : "square")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(shouldSaveDefaultAddress ? Theme.gold : Theme.muted)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Set as default delivery address")
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                        Text("Save this address to the client's profile for future orders.")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                    }
+
+                    Spacer()
+                }
+                .padding(14)
+                .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+        )
+    }
+}
+
 private struct SellingCollectionPanel: View {
     let title: String
     let subtitle: String
@@ -3580,6 +4226,8 @@ private struct SellingCollectionPanel: View {
     let primaryActionTitle: String
     let primaryActionIcon: String
     let quantityForProduct: (SalesProduct) -> Int?
+    let onIncrementQuantity: ((SalesProduct) -> Void)?
+    let onDecrementQuantity: ((SalesProduct) -> Void)?
     let onSelectProduct: (SalesProduct) -> Void
     let onBack: () -> Void
     let onDiscardClient: () -> Void
@@ -3623,15 +4271,19 @@ private struct SellingCollectionPanel: View {
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(products) { product in
-                            Button {
-                                onSelectProduct(product)
-                            } label: {
-                                SellingCollectionRow(
-                                    product: product,
-                                    quantity: quantityForProduct(product)
-                                )
-                            }
-                            .buttonStyle(.plain)
+                            SellingCollectionRow(
+                                product: product,
+                                quantity: quantityForProduct(product),
+                                onSelectProduct: {
+                                    onSelectProduct(product)
+                                },
+                                onIncrementQuantity: onIncrementQuantity.map { action in
+                                    { action(product) }
+                                },
+                                onDecrementQuantity: onDecrementQuantity.map { action in
+                                    { action(product) }
+                                }
+                            )
                         }
                     }
                 }
@@ -3704,30 +4356,54 @@ private struct EmptySellingCollection: View {
 private struct SellingCollectionRow: View {
     let product: SalesProduct
     let quantity: Int?
+    let onSelectProduct: () -> Void
+    let onIncrementQuantity: (() -> Void)?
+    let onDecrementQuantity: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 14) {
-            ProductImageView(imageName: product.imageName)
-                .frame(width: 84, height: 84)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Button(action: onSelectProduct) {
+                HStack(spacing: 14) {
+                    ProductImageView(imageName: product.imageName)
+                        .frame(width: 84, height: 84)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(product.name)
-                    .font(.headline.weight(.black))
-                    .foregroundStyle(Theme.ink)
-                Text("\(product.audience) • \(product.id)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.muted)
-                Text(quantityText)
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(Theme.gold)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(product.name)
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.ink)
+                        Text("\(product.audience) • \(product.id)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.muted)
+                        if quantity == nil {
+                            Text("Wishlist item")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(Theme.gold)
+                        }
+                    }
+                }
             }
+            .buttonStyle(.plain)
 
             Spacer()
 
-            Text(product.price)
-                .font(.headline.weight(.black))
-                .foregroundStyle(Theme.ink)
+            VStack(alignment: .trailing, spacing: 10) {
+                Text(product.price)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                if let quantity {
+                    CartQuantityStepper(
+                        quantity: quantity,
+                        onDecrement: {
+                            onDecrementQuantity?()
+                        },
+                        onIncrement: {
+                            onIncrementQuantity?()
+                        }
+                    )
+                }
+            }
         }
         .padding(14)
         .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -3737,11 +4413,46 @@ private struct SellingCollectionRow: View {
         )
     }
 
-    private var quantityText: String {
-        guard let quantity, quantity > 0 else {
-            return "Wishlist item"
+}
+
+private struct CartQuantityStepper: View {
+    let quantity: Int
+    let onDecrement: () -> Void
+    let onIncrement: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onDecrement) {
+                Image(systemName: "minus")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(quantity > 1 ? Theme.ink : Theme.muted.opacity(0.45))
+                    .frame(width: 28, height: 28)
+                    .background(.white.opacity(0.76), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(quantity <= 1)
+
+            Text("\(quantity)")
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
+                .frame(minWidth: 22)
+
+            Button(action: onIncrement) {
+                Image(systemName: "plus")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 28, height: 28)
+                    .background(.white.opacity(0.76), in: Circle())
+            }
+            .buttonStyle(.plain)
         }
-        return "Quantity: \(quantity)"
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Theme.selected.opacity(0.88), in: Capsule())
+        .overlay(Capsule().stroke(Theme.line.opacity(0.42), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Quantity \(quantity)")
+        .accessibilityHint("Use plus or minus to update cart quantity")
     }
 }
 
@@ -3754,96 +4465,147 @@ private struct CreateClientProfilePanel: View {
     @State private var phone = ""
     @State private var email = ""
     @State private var birthday = ""
+    @State private var preferredLanguage = "English"
+    @State private var occasion = "N/A"
     @State private var preferredStyle = "N/A"
     @State private var budget = "N/A"
     @State private var size = "N/A"
     @State private var materialPreference = "N/A"
-    @State private var colorPreference = ""
+    @State private var colorPreference = "N/A"
+    @State private var preferredCategory = "N/A"
+    @State private var brandPreference = "N/A"
+    @State private var preferredContactMethod = "Phone"
+    @State private var marketingConsent = false
     @State private var notes = ""
+    @State private var followUpDate = ""
     @State private var consentAccepted = false
 
-    private let styles = ["N/A", "Minimal", "Statement", "Classic", "Bridal", "Evening"]
-    private let budgets = ["N/A", "Rs. 50K+", "Rs. 1L+", "Rs. 2L+", "Rs. 5L+"]
-    private let sizes = ["N/A", "EU 36", "EU 38", "EU 40", "One size"]
-    private let materials = ["N/A", "Gold hardware", "Silver hardware", "Pearl", "Diamond", "Leather"]
+    private let languages = ["English", "Hindi", "Marathi", "Gujarati"]
+    private let occasions = ["N/A", "Wedding", "Anniversary", "Birthday", "Festive", "Corporate Gift", "Evening Event", "Travel"]
+    private let styles = ["N/A", "Minimal", "Statement", "Classic", "Bridal", "Evening", "Formal", "Daily Luxury"]
+    private let budgets = ["N/A", "Rs. 50K+", "Rs. 1L+", "Rs. 2L+", "Rs. 5L+", "Rs. 10L+"]
+    private let sizes = ["N/A", "EU 36", "EU 38", "EU 40", "One size", "Watch 36mm", "Watch 40mm"]
+    private let materials = ["N/A", "Gold", "Rose Gold", "Silver", "Diamond", "Pearl", "Leather", "Satin"]
+    private let colors = ["N/A", "Champagne", "Black", "Ivory", "Gold", "Rose Gold", "Emerald", "Pearl", "Blue", "Brown"]
+    private let categories = ["N/A", "Handbags", "Clutches", "Watches", "Jewellery", "Necklaces", "Footwear", "Accessories"]
+    private let brands = ["N/A", "Bvlgari", "Cartier", "Dior", "Gucci", "Hermes", "Jimmy Choo", "Louis Vuitton", "Rolex", "Titan"]
+    private let contactMethods = ["Phone", "WhatsApp", "Email", "SMS"]
 
     private var canSave: Bool {
         !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var formColumns: [GridItem] {
+        [
+            GridItem(.flexible(), spacing: 12),
+            GridItem(.flexible(), spacing: 12)
+        ]
+    }
+
     var body: some View {
         Card {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 14) {
-                    ClientPanelBackButton(action: onBack)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(alignment: .top, spacing: 14) {
+                        ClientPanelBackButton(action: onBack)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Create Client Profile")
-                            .font(.title2.weight(.black))
-                        Text("Convert \(guestID) into a saved client profile")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.muted)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Create Client Profile")
+                                .font(.title2.weight(.black))
+                            Text("Convert \(guestID) into a saved client profile")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.muted)
+                        }
+
+                        Spacer()
+
+                        Text("Required: name and phone")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 8)
+                            .background(Theme.selected, in: Capsule())
                     }
 
-                    Spacer()
-
-                    Text("Required fields marked")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(Theme.gold)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 8)
-                        .background(Theme.selected, in: Capsule())
-                }
-
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 16) {
                         ProfileFormSection(title: "Identity") {
-                            ProfileTextField(title: "Full Name *", placeholder: "Client name", text: $fullName)
-                            ProfileTextField(title: "Phone *", placeholder: "+91 phone number", text: $phone)
-                            ProfileTextField(title: "Email", placeholder: "optional email", text: $email)
-                            ProfileTextField(title: "Birthday / Occasion", placeholder: "optional date or occasion", text: $birthday)
-                        }
-
-                        ProfileFormSection(title: "Preferences") {
-                            ProfileDropdown(title: "Style", options: styles, selection: $preferredStyle)
-                            ProfileDropdown(title: "Budget", options: budgets, selection: $budget)
-                            ProfileDropdown(title: "Size", options: sizes, selection: $size)
-                            ProfileDropdown(title: "Material", options: materials, selection: $materialPreference)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        ProfileFormSection(title: "Selling Notes") {
-                            ProfileTextField(title: "Color Preference", placeholder: "champagne, black, emerald...", text: $colorPreference)
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Client Note")
-                                    .font(.headline.weight(.black))
-                                TextEditor(text: $notes)
-                                    .scrollContentBackground(.hidden)
-                                    .padding(10)
-                                    .frame(minHeight: 152)
-                                    .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                            .stroke(Theme.line.opacity(0.45), lineWidth: 1)
-                                    )
-                                    .overlay(alignment: .topLeading) {
-                                        if notes.isEmpty {
-                                            Text("Add preferences, occasion, product interest, or follow-up promise...")
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(Theme.muted.opacity(0.66))
-                                                .padding(.horizontal, 16)
-                                                .padding(.vertical, 18)
-                                        }
-                                    }
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileTextField(title: "Name *", placeholder: "Client name", text: $fullName)
+                                ProfileTextField(title: "Phone *", placeholder: "+91 phone number", text: $phone)
+                                ProfileTextField(title: "Email", placeholder: "optional email", text: $email)
+                                ProfileTextField(title: "Birthday", placeholder: "DD MMM or birth date", text: $birthday)
+                                ProfileDropdown(title: "Preferred Language", options: languages, selection: $preferredLanguage)
                             }
+                        }
 
-                            Toggle("Client allows saved preferences and purchase history visibility", isOn: $consentAccepted)
-                                .font(.headline.weight(.bold))
-                                .tint(Theme.gold)
+                        ProfileFormSection(title: "Membership") {
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileReadOnlyRow(title: "Tier (Auto)", value: "Normal")
+                                ProfileReadOnlyRow(title: "Reward Points", value: "0")
+                                ProfileReadOnlyRow(title: "Lifetime Spend", value: "Rs. 0")
+                            }
+                        }
+
+                        ProfileFormSection(title: "Shopping Preferences") {
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileDropdown(title: "Occasion", options: occasions, selection: $occasion)
+                                ProfileDropdown(title: "Budget", options: budgets, selection: $budget)
+                                ProfileDropdown(title: "Style", options: styles, selection: $preferredStyle)
+                                ProfileDropdown(title: "Material", options: materials, selection: $materialPreference)
+                                ProfileDropdown(title: "Size", options: sizes, selection: $size)
+                                ProfileDropdown(title: "Preferred Color", options: colors, selection: $colorPreference)
+                                ProfileDropdown(title: "Preferred Category", options: categories, selection: $preferredCategory)
+                                ProfileDropdown(title: "Brand Preference", options: brands, selection: $brandPreference)
+                            }
+                        }
+
+                        ProfileFormSection(title: "Communication") {
+                            LazyVGrid(columns: formColumns, spacing: 12) {
+                                ProfileDropdown(title: "Preferred Contact Method", options: contactMethods, selection: $preferredContactMethod)
+
+                                ProfileToggleRow(
+                                    title: "Marketing Consent",
+                                    subtitle: "Allow campaign and event communication",
+                                    isOn: $marketingConsent
+                                )
+
+                                ProfileToggleRow(
+                                    title: "Preference Visibility Consent",
+                                    subtitle: "Show saved preferences to sales associate",
+                                    isOn: $consentAccepted
+                                )
+                            }
+                        }
+
+                        ProfileFormSection(title: "Sales Notes") {
+                            VStack(alignment: .leading, spacing: 14) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Client Notes".uppercased())
+                                        .font(.caption.weight(.black))
+                                        .foregroundStyle(Theme.muted)
+                                    TextEditor(text: $notes)
+                                        .scrollContentBackground(.hidden)
+                                        .padding(10)
+                                        .frame(minHeight: 118)
+                                        .background(.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                                .stroke(Theme.line.opacity(0.45), lineWidth: 1)
+                                        )
+                                        .overlay(alignment: .topLeading) {
+                                            if notes.isEmpty {
+                                                Text("Add product interest, service note, or follow-up promise...")
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundStyle(Theme.muted.opacity(0.66))
+                                                    .padding(.horizontal, 16)
+                                                    .padding(.vertical, 18)
+                                            }
+                                        }
+                                }
+
+                                ProfileTextField(title: "Follow-up Date", placeholder: "Tomorrow, 4 PM or date", text: $followUpDate)
+                            }
                         }
 
                         Button {
@@ -3859,18 +4621,25 @@ private struct CreateClientProfilePanel: View {
                         .disabled(!canSave)
                         .opacity(canSave ? 1 : 0.55)
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: 820, alignment: .top)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
+            .scrollIndicators(.hidden)
         }
     }
 
     private func makeProfile() -> ClientProfile {
         let name = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         let capturedPreferences = [
+            occasion,
+            budget,
             preferredStyle,
             materialPreference,
-            colorPreference
+            size,
+            colorPreference,
+            preferredCategory,
+            brandPreference
         ]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0 != "N/A" }
@@ -3883,10 +4652,15 @@ private struct CreateClientProfilePanel: View {
             phone: phone.trimmingCharacters(in: .whitespacesAndNewlines),
             initials: initials(for: name),
             name: name,
+            email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+            birthday: birthday.trimmingCharacters(in: .whitespacesAndNewlines),
+            preferredLanguage: preferredLanguage,
+            preferredContactMethod: preferredContactMethod,
+            marketingConsent: marketingConsent,
+            followUpDate: followUpDate.trimmingCharacters(in: .whitespacesAndNewlines),
             tier: "Normal",
             lifetimePurchaseAmount: 0,
             boutique: "Mumbai",
-            lastVisit: "Today",
             status: consentAccepted ? "Preferences visible" : "Profile created - preferences hidden",
             note: resolvedNote,
             attributes: visibleAttributes,
@@ -3900,19 +4674,40 @@ private struct CreateClientProfilePanel: View {
                     icon: "heart",
                     title: capturedPreferences.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
                     subtitle: capturedPreferences.isEmpty ? "No optional preference data saved" : (consentAccepted ? preferenceSummary : "Other preferences require client consent")
+                ),
+                ClientTask(
+                    icon: marketingConsent ? "megaphone.fill" : "bell.slash",
+                    title: marketingConsent ? "Marketing consent on" : "Marketing consent off",
+                    subtitle: marketingConsent ? "Client can receive campaigns by \(preferredContactMethod)" : "Do not send marketing campaigns"
                 )
-            ]
+            ] + followUpTasks()
         )
     }
 
     private func profileAttributes() -> [ClientAttribute] {
         var attributes: [ClientAttribute] = []
-        appendAttribute("Size", value: size, to: &attributes)
-        appendAttribute("Style", value: preferredStyle, to: &attributes)
+        appendAttribute("Occasion", value: occasion, to: &attributes)
         appendAttribute("Budget", value: budget, to: &attributes)
-        appendAttribute("Preference", value: materialPreference, to: &attributes)
-        appendAttribute("Color", value: colorPreference, to: &attributes)
+        appendAttribute("Style", value: preferredStyle, to: &attributes)
+        appendAttribute("Material", value: materialPreference, to: &attributes)
+        appendAttribute("Size", value: size, to: &attributes)
+        appendAttribute("Preferred Color", value: colorPreference, to: &attributes)
+        appendAttribute("Preferred Category", value: preferredCategory, to: &attributes)
+        appendAttribute("Brand Preference", value: brandPreference, to: &attributes)
         return attributes
+    }
+
+    private func followUpTasks() -> [ClientTask] {
+        let followUp = followUpDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !followUp.isEmpty else { return [] }
+
+        return [
+            ClientTask(
+                icon: "calendar.badge.clock",
+                title: "Follow-up",
+                subtitle: followUp
+            )
+        ]
     }
 
     private func appendAttribute(
@@ -3950,6 +4745,52 @@ private struct ProfileFormSection<Content: View>: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Theme.line.opacity(0.45), lineWidth: 1)
         )
+    }
+}
+
+private struct ProfileReadOnlyRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.caption.weight(.black))
+                .foregroundStyle(Theme.muted)
+
+            Spacer()
+
+            Text(value)
+                .font(.headline.weight(.black))
+                .foregroundStyle(Theme.ink)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 50)
+        .background(Theme.selected.opacity(0.66), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct ProfileToggleRow: View {
+    let title: String
+    let subtitle: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.ink)
+
+                Text(subtitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.muted)
+            }
+        }
+        .tint(Theme.gold)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 58)
+        .background(.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -4266,7 +5107,7 @@ private struct BarColumn: View {
                 VStack {
                     Spacer()
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(day.isBest ? Theme.bestBar : Theme.goldGradient)
+                        .fill(day.isBest ? AnyShapeStyle(Theme.goldGradient) : AnyShapeStyle(Theme.goldGradient.opacity(0.40)))
                         .frame(height: max(28, proxy.size.height * day.progress))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4409,17 +5250,17 @@ private struct SectionHeader: View {
 }
 
 enum Theme {
-    static let ink = Color(red: 0.14, green: 0.12, blue: 0.10)
-    static let muted = Color(red: 0.46, green: 0.42, blue: 0.36)
-    static let gold = Color(red: 0.66, green: 0.47, blue: 0.22)
-    static let line = Color(red: 0.74, green: 0.61, blue: 0.40).opacity(0.28)
-    static let selected = Color(red: 0.95, green: 0.90, blue: 0.82)
+    static let ink = Color(red: 0.15, green: 0.13, blue: 0.11)
+    static let muted = Color(red: 0.54, green: 0.49, blue: 0.44)
+    static let gold = Color(red: 0.70, green: 0.54, blue: 0.33)
+    static let line = Color(red: 0.82, green: 0.78, blue: 0.73).opacity(0.35)
+    static let selected = Color(red: 0.94, green: 0.90, blue: 0.85)
 
     static let background = LinearGradient(
         colors: [
-            Color(red: 0.98, green: 0.96, blue: 0.92),
-            Color(red: 0.95, green: 0.91, blue: 0.85),
-            Color(red: 0.90, green: 0.85, blue: 0.78)
+            Color(red: 0.99, green: 0.98, blue: 0.97),
+            Color(red: 0.97, green: 0.95, blue: 0.92),
+            Color(red: 0.94, green: 0.91, blue: 0.87)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -4427,20 +5268,11 @@ enum Theme {
 
     static let goldGradient = LinearGradient(
         colors: [
-            Color(red: 0.63, green: 0.46, blue: 0.23),
-            Color(red: 0.79, green: 0.62, blue: 0.34)
+            Color(red: 0.68, green: 0.52, blue: 0.31),
+            Color(red: 0.78, green: 0.63, blue: 0.42)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
-    )
-
-    static let bestBar = LinearGradient(
-        colors: [
-            Color(red: 0.16, green: 0.14, blue: 0.12),
-            Color(red: 0.58, green: 0.42, blue: 0.21)
-        ],
-        startPoint: .top,
-        endPoint: .bottom
     )
 }
 
@@ -4585,76 +5417,6 @@ class SupabaseAuthService {
         }
 
         return try JSONDecoder().decode(SupabaseUser.self, from: data)
-    }
-
-    func fetchClients(accessToken: String) async throws -> [ClientProfile] {
-        let restBaseURL = baseURL.replacingOccurrences(of: "/auth/v1", with: "/rest/v1")
-        
-        do {
-            return try await performFetchClientsRequest(urlStr: "\(restBaseURL)/clients", accessToken: accessToken)
-        } catch {
-            return try await performFetchClientsRequest(urlStr: "\(restBaseURL)/client_profiles", accessToken: accessToken)
-        }
-    }
-
-    private func performFetchClientsRequest(urlStr: String, accessToken: String) async throws -> [ClientProfile] {
-        guard let url = URL(string: urlStr) else {
-            throw AuthError.invalidResponse
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue(anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthError.invalidResponse
-        }
-
-        if httpResponse.statusCode != 200 {
-            throw AuthError.serverError("Fetch failed with status: \(httpResponse.statusCode)")
-        }
-
-        return try JSONDecoder().decode([ClientProfile].self, from: data)
-    }
-
-    func saveClient(accessToken: String, client: ClientProfile) async throws {
-        let restBaseURL = baseURL.replacingOccurrences(of: "/auth/v1", with: "/rest/v1")
-        
-        do {
-            try await performSaveClientRequest(urlStr: "\(restBaseURL)/clients", accessToken: accessToken, client: client)
-        } catch {
-            try await performSaveClientRequest(urlStr: "\(restBaseURL)/client_profiles", accessToken: accessToken, client: client)
-        }
-    }
-
-    private func performSaveClientRequest(urlStr: String, accessToken: String, client: ClientProfile) async throws {
-        guard let url = URL(string: urlStr) else {
-            throw AuthError.invalidResponse
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
-
-        let encoder = JSONEncoder()
-        request.httpBody = try encoder.encode(client)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AuthError.invalidResponse
-        }
-
-        if httpResponse.statusCode != 201 && httpResponse.statusCode != 200 {
-            throw AuthError.serverError("Save failed with status: \(httpResponse.statusCode)")
-        }
     }
 }
 

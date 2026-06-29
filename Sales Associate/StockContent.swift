@@ -105,9 +105,9 @@ private struct StockModePicker: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                         .frame(maxWidth: .infinity, minHeight: 44)
-                        .foregroundStyle(selectedMode == mode ? .white : Theme.muted)
+                        .foregroundStyle(selectedMode == mode ? Theme.gold : Theme.muted)
                         .background(
-                            selectedMode == mode ? AnyShapeStyle(Theme.bestBar) : AnyShapeStyle(.clear),
+                            selectedMode == mode ? AnyShapeStyle(Theme.selected) : AnyShapeStyle(Color.clear),
                             in: Capsule()
                         )
                 }
@@ -474,7 +474,7 @@ private struct StockScanPane: View {
             VStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .fill(Theme.bestBar)
+                        .fill(Theme.goldGradient)
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(.white.opacity(0.42), style: StrokeStyle(lineWidth: 2, dash: [12, 10]))
                         .padding(22)
