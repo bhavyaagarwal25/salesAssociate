@@ -103,19 +103,19 @@ struct LoginView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 30) {
-                Spacer()
+//                Spacer()
 
                 // Top branding / logo
                 VStack(spacing: 8) {
-                    Text("R S M S")
+                    Text("Luxe Maison")
                         .font(.system(size: 38, weight: .black, design: .serif))
                         .tracking(12)
                         .foregroundStyle(Theme.ink)
                     
-                    Text("BOUTIQUE PORTAL")
-                        .font(.system(size: 14, weight: .bold))
-                        .tracking(4)
-                        .foregroundStyle(Theme.gold)
+//                    Text("BOUTIQUE PORTAL")
+//                        .font(.system(size: 14, weight: .bold))
+//                        .tracking(4)
+//                        .foregroundStyle(Theme.gold)
 
                     Rectangle()
                         .fill(Theme.goldGradient)
@@ -800,6 +800,10 @@ enum SalesAssociateTab: String, CaseIterable, Identifiable {
         case .issue:
             return "list.clipboard"
         }
+    }
+
+    static var allCases: [SalesAssociateTab] {
+        return [.today, .client, .sell]
     }
 }
 

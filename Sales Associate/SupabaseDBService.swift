@@ -46,7 +46,9 @@ class SupabaseDBService {
         request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
         
         let encoder = JSONEncoder()
-        let jsonData = try encoder.encode(profile)
+        var dictionary = try JSONSerialization.jsonObject(with: try encoder.encode(profile)) as? [String: Any] ?? [:]
+        dictionary.removeValue(forKey: "tasks")
+        let jsonData = try JSONSerialization.data(withJSONObject: dictionary)
         request.httpBody = jsonData
         
         let (_, response) = try await URLSession.shared.data(for: request)
@@ -71,7 +73,12 @@ class SupabaseDBService {
         request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
         
         let encoder = JSONEncoder()
-        let jsonData = try encoder.encode(profiles)
+        let dictionaries = try profiles.map { profile -> [String: Any] in
+            var dict = try JSONSerialization.jsonObject(with: try encoder.encode(profile)) as? [String: Any] ?? [:]
+            dict.removeValue(forKey: "tasks")
+            return dict
+        }
+        let jsonData = try JSONSerialization.data(withJSONObject: dictionaries)
         request.httpBody = jsonData
         
         let (_, response) = try await URLSession.shared.data(for: request)

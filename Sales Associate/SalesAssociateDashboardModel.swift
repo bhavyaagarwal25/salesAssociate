@@ -243,11 +243,60 @@ struct ClientProfile: Identifiable, Equatable, Codable {
         status = try container.decode(String.self, forKey: .status)
         note = try container.decode(String.self, forKey: .note)
         attributes = try container.decode([ClientAttribute].self, forKey: .attributes)
-        tasks = try container.decode([ClientTask].self, forKey: .tasks)
+        let decodedTasks = try container.decodeIfPresent([ClientTask].self, forKey: .tasks) ?? []
+        if decodedTasks.isEmpty {
+            self.tasks = Self.reconstructTasks(
+                status: status,
+                marketingConsent: marketingConsent,
+                followUpDate: followUpDate,
+                attributes: attributes
+            )
+        } else {
+            self.tasks = decodedTasks
+        }
         purchaseHistory = try container.decodeIfPresent([ClientPurchase].self, forKey: .purchaseHistory) ?? []
         wishlistProductIDs = try container.decodeIfPresent([String].self, forKey: .wishlistProductIDs) ?? []
         defaultDeliveryAddress = try container.decodeIfPresent(String.self, forKey: .defaultDeliveryAddress)
         deliveryAddressDetail = try container.decodeIfPresent(String.self, forKey: .deliveryAddressDetail)
+    }
+
+    static func reconstructTasks(
+        status: String,
+        marketingConsent: Bool,
+        followUpDate: String,
+        attributes: [ClientAttribute]
+    ) -> [ClientTask] {
+        var tasks: [ClientTask] = []
+        
+        let consentAccepted = status.lowercased().contains("verified") || status.lowercased().contains("visible")
+        
+        tasks.append(ClientTask(
+            icon: consentAccepted ? "checkmark.shield" : "eye.slash",
+            title: consentAccepted ? "Preference consent on" : "Preference consent pending",
+            subtitle: consentAccepted ? "Preferences and history visible" : "Only identity is visible to sales associate"
+        ))
+        
+        tasks.append(ClientTask(
+            icon: "heart",
+            title: attributes.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
+            subtitle: attributes.isEmpty ? "No optional preference data saved" : (consentAccepted ? attributes.map { "\($0.title): \($0.value)" }.joined(separator: ", ") : "Other preferences require client consent")
+        ))
+        
+        tasks.append(ClientTask(
+            icon: marketingConsent ? "megaphone.fill" : "bell.slash",
+            title: marketingConsent ? "Marketing consent on" : "Marketing consent off",
+            subtitle: marketingConsent ? "Client can receive campaigns" : "Do not send marketing campaigns"
+        ))
+        
+        if !followUpDate.isEmpty {
+            tasks.append(ClientTask(
+                icon: "calendar.badge.clock",
+                title: "Follow-up",
+                subtitle: followUpDate
+            ))
+        }
+        
+        return tasks
     }
 
     func matches(_ query: String) -> Bool {
