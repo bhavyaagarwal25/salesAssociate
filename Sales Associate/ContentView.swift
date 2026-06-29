@@ -1897,7 +1897,7 @@ private struct ClientDetailCard: View {
             }
 
             if client.allowsPurchaseHistoryVisibility {
-                ClientPurchaseHistorySection(purchases: client.purchaseHistory)
+                ClientPurchaseHistorySection(purchases: client.purchaseHistory, allProducts: products)
                 ClientWishlistInsightSection(products: wishlistProducts)
             }
 
@@ -2113,6 +2113,7 @@ private struct ClientRestrictedInsightNotice: View {
 
 private struct ClientPurchaseHistorySection: View {
     let purchases: [ClientPurchase]
+    let allProducts: [SalesProduct]
 
     var body: some View {
         if !purchases.isEmpty {
@@ -2130,7 +2131,7 @@ private struct ClientPurchaseHistorySection: View {
                 }
 
                 ForEach(purchases) { purchase in
-                    ClientPurchaseRow(purchase: purchase)
+                    ClientPurchaseRow(purchase: purchase, allProducts: allProducts)
                 }
             }
             .padding(16)
@@ -2145,14 +2146,25 @@ private struct ClientPurchaseHistorySection: View {
 
 private struct ClientPurchaseRow: View {
     let purchase: ClientPurchase
+    let allProducts: [SalesProduct]
+
+    private var matchedProduct: SalesProduct? {
+        allProducts.first { $0.id == purchase.productID }
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "bag.badge.checkmark")
-                .font(.headline.weight(.black))
-                .foregroundStyle(Theme.gold)
-                .frame(width: 42, height: 42)
-                .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            if let matchedProduct {
+                ProductImageView(imageName: matchedProduct.imageName)
+                    .frame(width: 42, height: 42)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                Image(systemName: "bag.badge.checkmark")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(Theme.gold)
+                    .frame(width: 42, height: 42)
+                    .background(Theme.selected, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(purchase.productName)
