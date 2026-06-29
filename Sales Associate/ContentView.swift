@@ -2999,31 +2999,29 @@ private struct SellHeader: View {
             Spacer()
 
             if session.hasActiveClient {
-                HStack(spacing: 12) {
-                    if session.hasCreatedProfile {
-                        Button {
-                            onUpdateAndClose?()
-                        } label: {
-                            Image(systemName: "checkmark")
-                                .font(.headline.weight(.black))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(Theme.goldGradient, in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text(session.hasCreatedProfile ? "Client Profile" : "Guest Session")
-                            .font(.caption.weight(.black))
-                            .foregroundStyle(Theme.muted)
+                if session.hasCreatedProfile {
+                    Button {
+                        onUpdateAndClose?()
+                    } label: {
                         Text(session.displayName)
                             .font(.headline.weight(.black))
                             .foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(Theme.selected, in: Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(Theme.gold.opacity(0.3), lineWidth: 1)
+                            )
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Theme.selected, in: Capsule())
+                    .buttonStyle(.plain)
+                } else {
+                    Text(session.displayName)
+                        .font(.headline.weight(.black))
+                        .foregroundStyle(Theme.gold)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(Theme.selected, in: Capsule())
                 }
             }
         }
