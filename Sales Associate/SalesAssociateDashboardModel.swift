@@ -268,24 +268,32 @@ struct ClientProfile: Identifiable, Equatable, Codable {
     ) -> [ClientTask] {
         var tasks: [ClientTask] = []
         
-        let consentAccepted = status.lowercased().contains("verified") || status.lowercased().contains("visible")
+        let normalizedStatus = status.lowercased()
+        let prefAllowed = normalizedStatus.contains("consent verified") || normalizedStatus.contains("consent on") || normalizedStatus.contains("preferences visible") || normalizedStatus.contains("profile and purchase history allowed")
+        let histAllowed = normalizedStatus.contains("consent verified") || normalizedStatus.contains("purchase history visible") || normalizedStatus.contains("purchase history allowed") || normalizedStatus.contains("history visible") || normalizedStatus.contains("profile and purchase history allowed")
+        
+        // Combined Client Consents task (Preference & Marketing Consent)
+        var insightText = "Insights hidden"
+        if prefAllowed && histAllowed {
+            insightText = "Preferences & history visible"
+        } else if prefAllowed {
+            insightText = "Preferences visible"
+        } else if histAllowed {
+            insightText = "History visible"
+        }
+        
+        let marketingText = marketingConsent ? "Marketing on" : "Marketing off"
         
         tasks.append(ClientTask(
-            icon: consentAccepted ? "checkmark.shield" : "eye.slash",
-            title: consentAccepted ? "Preference consent on" : "Preference consent pending",
-            subtitle: consentAccepted ? "Preferences and history visible" : "Only identity is visible to sales associate"
+            icon: (prefAllowed || histAllowed || marketingConsent) ? "checkmark.shield" : "eye.slash",
+            title: "Client Consents",
+            subtitle: "\(insightText) • \(marketingText)"
         ))
         
         tasks.append(ClientTask(
             icon: "heart",
-            title: attributes.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
-            subtitle: attributes.isEmpty ? "No optional preference data saved" : (consentAccepted ? attributes.map { "\($0.title): \($0.value)" }.joined(separator: ", ") : "Other preferences require client consent")
-        ))
-        
-        tasks.append(ClientTask(
-            icon: marketingConsent ? "megaphone.fill" : "bell.slash",
-            title: marketingConsent ? "Marketing consent on" : "Marketing consent off",
-            subtitle: marketingConsent ? "Client can receive campaigns" : "Do not send marketing campaigns"
+            title: attributes.isEmpty ? "Preferences pending" : (prefAllowed ? "Preferences saved" : "Preferences captured privately"),
+            subtitle: attributes.isEmpty ? "No optional preference data saved" : (prefAllowed ? attributes.map { "\($0.title): \($0.value)" }.joined(separator: ", ") : "Other preferences require client consent")
         ))
         
         if !followUpDate.isEmpty {

@@ -1652,22 +1652,20 @@ private struct ClientDetailCard: View {
     private func updateConsent(
         preferenceVisibilityAllowed: Bool,
         purchaseHistoryAllowed: Bool,
+        marketingConsent: Bool,
         approvalNote _: String
     ) {
-        let updatedTasks = client.tasks.map { task in
-            guard task.title.lowercased().contains("consent") else {
-                return task
-            }
-
-            return ClientTask(
-                icon: "checkmark.shield",
-                title: "Client insight consent on",
-                subtitle: consentSubtitle(
-                    preferenceVisibilityAllowed: preferenceVisibilityAllowed,
-                    purchaseHistoryAllowed: purchaseHistoryAllowed
-                )
-            )
-        }
+        let newStatus = consentStatus(
+            preferenceVisibilityAllowed: preferenceVisibilityAllowed,
+            purchaseHistoryAllowed: purchaseHistoryAllowed
+        )
+        
+        let updatedTasks = ClientProfile.reconstructTasks(
+            status: newStatus,
+            marketingConsent: marketingConsent,
+            followUpDate: client.followUpDate,
+            attributes: client.attributes
+        )
 
         onUpdateClient(
             ClientProfile(
@@ -1679,15 +1677,12 @@ private struct ClientDetailCard: View {
                 birthday: client.birthday,
                 preferredLanguage: client.preferredLanguage,
                 preferredContactMethod: client.preferredContactMethod,
-                marketingConsent: client.marketingConsent,
+                marketingConsent: marketingConsent,
                 followUpDate: client.followUpDate,
                 tier: client.tier,
                 lifetimePurchaseAmount: client.lifetimePurchaseAmount,
                 boutique: client.boutique,
-                status: consentStatus(
-                    preferenceVisibilityAllowed: preferenceVisibilityAllowed,
-                    purchaseHistoryAllowed: purchaseHistoryAllowed
-                ),
+                status: newStatus,
                 note: client.note,
                 attributes: client.attributes,
                 tasks: updatedTasks,
@@ -1720,7 +1715,9 @@ private struct ClientDetailCard: View {
         purchaseHistoryAllowed: Bool
     ) -> String {
         switch (preferenceVisibilityAllowed, purchaseHistoryAllowed) {
-        case (true, true), (true, false):
+        case (true, true):
+            return "Profile and purchase history allowed"
+        case (true, false):
             return "Preferences visible"
         case (false, true):
             return "Purchase history visible"
@@ -1748,18 +1745,15 @@ private struct ClientDetailCard: View {
         let replacedTitles = Set(["Size", "Style", "Budget", "Preference", "Color"])
         let retainedAttributes = client.attributes.filter { !replacedTitles.contains($0.title) }
         let note = preferenceNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        let summary = preferenceAttributes.map(\.value).joined(separator: ", ")
-        let updatedTasks = client.tasks.map { task in
-            guard task.title.lowercased().contains("preference") && !task.title.lowercased().contains("consent") else {
-                return task
-            }
-
-            return ClientTask(
-                icon: "heart.fill",
-                title: "Preferences saved",
-                subtitle: summary.isEmpty ? "Preference details updated" : summary
-            )
-        }
+        
+        let newAttributes = retainedAttributes + preferenceAttributes
+        
+        let updatedTasks = ClientProfile.reconstructTasks(
+            status: client.status,
+            marketingConsent: client.marketingConsent,
+            followUpDate: client.followUpDate,
+            attributes: newAttributes
+        )
 
         onUpdateClient(
             ClientProfile(
@@ -1778,7 +1772,7 @@ private struct ClientDetailCard: View {
                 boutique: client.boutique,
                 status: client.status,
                 note: note,
-                attributes: retainedAttributes + preferenceAttributes,
+                attributes: newAttributes,
                 tasks: updatedTasks,
                 purchaseHistory: client.purchaseHistory,
                 wishlistProductIDs: client.wishlistProductIDs,
@@ -2311,22 +2305,24 @@ private struct ClientPanelBackButton: View {
 private struct ClientConsentApprovalPanel: View {
     let client: ClientProfile
     let onBack: () -> Void
-    let onSave: (Bool, Bool, String) -> Void
+    let onSave: (Bool, Bool, Bool, String) -> Void
 
     @State private var preferenceVisibilityAllowed = false
     @State private var purchaseHistoryAllowed = false
+    @State private var marketingConsent = false
     @State private var isSaved = false
 
     init(
         client: ClientProfile,
         onBack: @escaping () -> Void,
-        onSave: @escaping (Bool, Bool, String) -> Void
+        onSave: @escaping (Bool, Bool, Bool, String) -> Void
     ) {
         self.client = client
         self.onBack = onBack
         self.onSave = onSave
-        _preferenceVisibilityAllowed = State(initialValue: client.hasClientInsightConsent)
-        _purchaseHistoryAllowed = State(initialValue: client.hasClientInsightConsent)
+        _preferenceVisibilityAllowed = State(initialValue: client.allowsPreferenceVisibility)
+        _purchaseHistoryAllowed = State(initialValue: client.allowsPurchaseHistoryVisibility)
+        _marketingConsent = State(initialValue: client.marketingConsent)
     }
 
     var body: some View {
@@ -2335,10 +2331,10 @@ private struct ClientConsentApprovalPanel: View {
                 ClientPanelBackButton(action: onBack)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Preference Consent")
+                    Text("Client Consent")
                         .font(.title2.weight(.black))
                         .foregroundStyle(Theme.ink)
-                    Text("Take approval before showing preferences and purchase history to Sales Associate.")
+                    Text("Take approval before showing preferences, purchase history, and sending marketing campaigns.")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.muted)
                 }
@@ -2380,13 +2376,20 @@ private struct ClientConsentApprovalPanel: View {
                 ConsentToggleRow(
                     title: "Client allows purchase history visibility",
                     subtitle: "Past purchases can be used for recommendations and follow-up.",
-                    icon: "bag.badge.checkmark",
+                    icon: "bag",
                     isOn: $purchaseHistoryAllowed
+                )
+
+                ConsentToggleRow(
+                    title: "Client allows marketing campaigns",
+                    subtitle: "Client can receive newsletters, campaigns, and updates.",
+                    icon: "megaphone",
+                    isOn: $marketingConsent
                 )
             }
 
             Button {
-                onSave(preferenceVisibilityAllowed, purchaseHistoryAllowed, "")
+                onSave(preferenceVisibilityAllowed, purchaseHistoryAllowed, marketingConsent, "")
                 isSaved = true
             } label: {
                 Label(isSaved ? "Consent Captured" : "Capture Consent", systemImage: isSaved ? "checkmark.seal.fill" : "checkmark.shield")
@@ -2396,8 +2399,6 @@ private struct ClientConsentApprovalPanel: View {
                     .background(Theme.goldGradient, in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!preferenceVisibilityAllowed && !purchaseHistoryAllowed)
-            .opacity((preferenceVisibilityAllowed || purchaseHistoryAllowed) ? 1 : 0.55)
         }
     }
 }
@@ -4793,21 +4794,17 @@ private struct CreateClientProfilePanel: View {
 
     private func makeProfile() -> ClientProfile {
         let name = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let capturedPreferences = [
-            occasion,
-            budget,
-            preferredStyle,
-            materialPreference,
-            size,
-            colorPreference,
-            preferredCategory,
-            brandPreference
-        ]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && $0 != "N/A" }
-        let preferenceSummary = capturedPreferences.isEmpty ? "No preferences captured" : capturedPreferences.joined(separator: ", ")
         let resolvedNote = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let visibleAttributes = profileAttributes()
+
+        let status = consentAccepted ? "Preferences visible" : "Profile created - preferences hidden"
+        let attributes = visibleAttributes
+        let tasks = ClientProfile.reconstructTasks(
+            status: status,
+            marketingConsent: marketingConsent,
+            followUpDate: followUpDate.trimmingCharacters(in: .whitespacesAndNewlines),
+            attributes: attributes
+        )
 
         return ClientProfile(
             id: "CL-\(Int.random(in: 2000...9999))",
@@ -4823,26 +4820,10 @@ private struct CreateClientProfilePanel: View {
             tier: "Normal",
             lifetimePurchaseAmount: 0,
             boutique: "Mumbai",
-            status: consentAccepted ? "Preferences visible" : "Profile created - preferences hidden",
+            status: status,
             note: resolvedNote,
-            attributes: visibleAttributes,
-            tasks: [
-                ClientTask(
-                    icon: consentAccepted ? "checkmark.shield" : "eye.slash",
-                    title: consentAccepted ? "Preference consent on" : "Preference consent pending",
-                    subtitle: consentAccepted ? "Preferences and history visible" : "Only identity is visible to sales associate"
-                ),
-                ClientTask(
-                    icon: "heart",
-                    title: capturedPreferences.isEmpty ? "Preferences pending" : (consentAccepted ? "Preferences saved" : "Preferences captured privately"),
-                    subtitle: capturedPreferences.isEmpty ? "No optional preference data saved" : (consentAccepted ? preferenceSummary : "Other preferences require client consent")
-                ),
-                ClientTask(
-                    icon: marketingConsent ? "megaphone.fill" : "bell.slash",
-                    title: marketingConsent ? "Marketing consent on" : "Marketing consent off",
-                    subtitle: marketingConsent ? "Client can receive campaigns by \(preferredContactMethod)" : "Do not send marketing campaigns"
-                )
-            ] + followUpTasks()
+            attributes: attributes,
+            tasks: tasks
         )
     }
 
