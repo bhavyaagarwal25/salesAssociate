@@ -99,8 +99,13 @@ struct LoginView: View {
     var body: some View {
         ZStack {
             // Elegant background matching theme
-            Theme.background
-                .ignoresSafeArea()
+//            Theme.background
+//                .ignoresSafeArea()
+            
+            Image("LoginBackground")
+                    .resizable()
+                    .scaledToFill()
+                    .ignoresSafeArea()
 
             VStack(spacing: 30) {
 //                Spacer()
