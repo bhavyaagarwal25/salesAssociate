@@ -800,7 +800,45 @@ struct TodayDashboardView: View {
                 products: products,
                 session: $sellingSession,
                 onDiscardClient: discardSellingSession,
-                onCreateProfile: saveCreatedProfile
+                onCreateProfile: saveCreatedProfile,
+                onUpdateAndClose: {
+                    if let client = sellingSession.createdClient {
+                        // Combine wishlist and cart, avoiding duplicates
+                        var combinedWishlist = sellingSession.wishlistProductIDs
+                        for cartProductID in sellingSession.cartProductIDs {
+                            if !combinedWishlist.contains(cartProductID) {
+                                combinedWishlist.append(cartProductID)
+                            }
+                        }
+                        
+                        let updatedProfile = ClientProfile(
+                            id: client.id,
+                            phone: client.phone,
+                            initials: client.initials,
+                            name: client.name,
+                            email: client.email,
+                            birthday: client.birthday,
+                            preferredLanguage: client.preferredLanguage,
+                            preferredContactMethod: client.preferredContactMethod,
+                            marketingConsent: client.marketingConsent,
+                            followUpDate: client.followUpDate,
+                            tier: client.tier,
+                            rewardPoints: client.rewardPoints,
+                            lifetimePurchaseAmount: client.lifetimePurchaseAmount,
+                            boutique: client.boutique,
+                            status: client.status,
+                            note: client.note,
+                            attributes: client.attributes,
+                            tasks: client.tasks,
+                            purchaseHistory: client.purchaseHistory,
+                            wishlistProductIDs: combinedWishlist,
+                            defaultDeliveryAddress: client.defaultDeliveryAddress,
+                            deliveryAddressDetail: client.deliveryAddressDetail
+                        )
+                        saveCreatedProfile(updatedProfile)
+                    }
+                    discardSellingSession()
+                }
             )
         case .stock:
             StockContent(dashboard: stockDashboard, products: products)
@@ -2578,6 +2616,7 @@ private struct SellContent: View {
     @Binding var session: SellingSessionState
     let onDiscardClient: () -> Void
     let onCreateProfile: (ClientProfile) -> Void
+    let onUpdateAndClose: () -> Void
 
     @State private var query = ""
     @State private var selectedCategoryID: String
@@ -2596,13 +2635,15 @@ private struct SellContent: View {
         products: [SalesProduct],
         session: Binding<SellingSessionState>,
         onDiscardClient: @escaping () -> Void,
-        onCreateProfile: @escaping (ClientProfile) -> Void
+        onCreateProfile: @escaping (ClientProfile) -> Void,
+        onUpdateAndClose: @escaping () -> Void
     ) {
         self.categories = categories
         self.products = products
         _session = session
         self.onDiscardClient = onDiscardClient
         self.onCreateProfile = onCreateProfile
+        self.onUpdateAndClose = onUpdateAndClose
         _selectedCategoryID = State(initialValue: categories.first?.id ?? "")
     }
 
@@ -2668,7 +2709,7 @@ private struct SellContent: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SellHeader(session: session)
+                SellHeader(session: session, onUpdateAndClose: onUpdateAndClose)
 
                 if session.activePanel == nil {
                     SellSearchRow(
@@ -2712,6 +2753,11 @@ private struct SellContent: View {
                         primaryActionTitle: "Move All Items to Cart",
                         primaryActionIcon: "bag.badge.plus",
                         quantityForProduct: { _ in nil },
+                        onMoveToCart: { product in
+                            session.addToCart(product, quantity: 1)
+                            session.wishlistProductIDs.removeAll { $0 == product.id }
+                            selectedProduct = nil
+                        },
                         onPrimaryAction: {
                             session.moveWishlistToCart()
                             selectedProduct = nil
@@ -2868,6 +2914,7 @@ private struct SellContent: View {
         quantityForProduct: @escaping (SalesProduct) -> Int?,
         onIncrementQuantity: ((SalesProduct) -> Void)? = nil,
         onDecrementQuantity: ((SalesProduct) -> Void)? = nil,
+        onMoveToCart: ((SalesProduct) -> Void)? = nil,
         onPrimaryAction: @escaping () -> Void
     ) -> some View {
         HStack(alignment: .top, spacing: 18) {
@@ -2884,6 +2931,7 @@ private struct SellContent: View {
                 quantityForProduct: quantityForProduct,
                 onIncrementQuantity: onIncrementQuantity,
                 onDecrementQuantity: onDecrementQuantity,
+                onMoveToCart: onMoveToCart,
                 onSelectProduct: { product in
                     selectedProduct = product
                 },
@@ -2925,6 +2973,7 @@ private struct SellContent: View {
 
 private struct SellHeader: View {
     let session: SellingSessionState
+    let onUpdateAndClose: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .bottom) {
@@ -2937,17 +2986,32 @@ private struct SellHeader: View {
             Spacer()
 
             if session.hasActiveClient {
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(session.hasCreatedProfile ? "Client Profile" : "Guest Session")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(Theme.muted)
-                    Text(session.displayName)
-                        .font(.headline.weight(.black))
-                        .foregroundStyle(Theme.gold)
+                HStack(spacing: 12) {
+                    if session.hasCreatedProfile {
+                        Button {
+                            onUpdateAndClose?()
+                        } label: {
+                            Image(systemName: "checkmark")
+                                .font(.headline.weight(.black))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(Theme.goldGradient, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(session.hasCreatedProfile ? "Client Profile" : "Guest Session")
+                            .font(.caption.weight(.black))
+                            .foregroundStyle(Theme.muted)
+                        Text(session.displayName)
+                            .font(.headline.weight(.black))
+                            .foregroundStyle(Theme.gold)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.selected, in: Capsule())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.selected, in: Capsule())
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4298,6 +4362,7 @@ private struct SellingCollectionPanel: View {
     let quantityForProduct: (SalesProduct) -> Int?
     let onIncrementQuantity: ((SalesProduct) -> Void)?
     let onDecrementQuantity: ((SalesProduct) -> Void)?
+    let onMoveToCart: ((SalesProduct) -> Void)?
     let onSelectProduct: (SalesProduct) -> Void
     let onBack: () -> Void
     let onDiscardClient: () -> Void
@@ -4351,6 +4416,9 @@ private struct SellingCollectionPanel: View {
                                     { action(product) }
                                 },
                                 onDecrementQuantity: onDecrementQuantity.map { action in
+                                    { action(product) }
+                                },
+                                onMoveToCart: onMoveToCart.map { action in
                                     { action(product) }
                                 }
                             )
@@ -4429,6 +4497,7 @@ private struct SellingCollectionRow: View {
     let onSelectProduct: () -> Void
     let onIncrementQuantity: (() -> Void)?
     let onDecrementQuantity: (() -> Void)?
+    let onMoveToCart: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 14) {
@@ -4445,11 +4514,6 @@ private struct SellingCollectionRow: View {
                         Text("\(product.audience) • \(product.id)")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.muted)
-                        if quantity == nil {
-                            Text("Wishlist item")
-                                .font(.caption.weight(.black))
-                                .foregroundStyle(Theme.gold)
-                        }
                     }
                 }
             }
@@ -4472,6 +4536,22 @@ private struct SellingCollectionRow: View {
                             onIncrementQuantity?()
                         }
                     )
+                } else {
+                    Button {
+                        onMoveToCart?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bag.badge.plus")
+                                .font(.caption.weight(.bold))
+                            Text("Move to Cart")
+                                .font(.caption2.weight(.bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Theme.goldGradient, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
