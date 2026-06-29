@@ -429,24 +429,31 @@ struct LoginView: View {
 
         Task {
             do {
+                // Fetch the real-time database profile first. If not found, access is denied!
+                guard let dbAssociate = await fetchAssociateProfile(email: cleanEmail) else {
+                    await MainActor.run {
+                        isAuthenticating = false
+                        errorMessage = "Access Denied: You are not authorized as a sales associate."
+                    }
+                    return
+                }
+
                 // local check for demo profiles with testing passcode '1234'
                 let demoEmails = SalesAssociateDashboard.samples.map { $0.associate.email.lowercased() }
                 if demoEmails.contains(cleanEmail) && cleanPasscode == "1234" {
                     try await Task.sleep(nanoseconds: 600_000_000)
                     let matchedDashboard = SalesAssociateDashboard.samples.first(where: { $0.associate.email.lowercased() == cleanEmail })!
+                    let dashboard = SalesAssociateDashboard(
+                        associate: dbAssociate,
+                        monthlyGoal: matchedDashboard.monthlyGoal,
+                        priorityItems: matchedDashboard.priorityItems,
+                        quickActions: matchedDashboard.quickActions,
+                        metrics: matchedDashboard.metrics,
+                        weeklySales: matchedDashboard.weeklySales
+                    )
                     await MainActor.run {
                         isAuthenticating = false
-                        onLoginSuccess(matchedDashboard)
-                    }
-                    return
-                }
-
-                // Check if user is in the User database table
-                let isRegistered = await SupabaseDBService.shared.isUserRegistered(email: cleanEmail)
-                guard isRegistered else {
-                    await MainActor.run {
-                        isAuthenticating = false
-                        errorMessage = "Access Denied: You are not authorized as a sales associate."
+                        onLoginSuccess(dashboard)
                     }
                     return
                 }
@@ -468,7 +475,15 @@ struct LoginView: View {
                             errorMessage = nil
                         }
                     } else {
-                        let dashboard = getDashboard(for: cleanEmail, metadata: session.user.userMetadata)
+                        let baseDashboard = getDashboard(for: cleanEmail, metadata: session.user.userMetadata)
+                        let dashboard = SalesAssociateDashboard(
+                            associate: dbAssociate,
+                            monthlyGoal: baseDashboard.monthlyGoal,
+                            priorityItems: baseDashboard.priorityItems,
+                            quickActions: baseDashboard.quickActions,
+                            metrics: baseDashboard.metrics,
+                            weeklySales: baseDashboard.weeklySales
+                        )
                         onLoginSuccess(dashboard)
                     }
                 }
@@ -502,12 +517,23 @@ struct LoginView: View {
             do {
                 let _ = try await SupabaseAuthService.shared.changePassword(accessToken: currentAccessToken, newPassword: cleanPassword)
                 
+                // Fetch the real-time database profile
+                let dbAssociate = await fetchAssociateProfile(email: tempUserEmail)
+                
                 await MainActor.run {
                     isAuthenticating = false
                     var updatedMetadata = tempUserMetadata ?? UserMetadata()
                     updatedMetadata.passwordChanged = true
                     
-                    let dashboard = getDashboard(for: tempUserEmail, metadata: updatedMetadata)
+                    let baseDashboard = getDashboard(for: tempUserEmail, metadata: updatedMetadata)
+                    let dashboard = SalesAssociateDashboard(
+                        associate: dbAssociate ?? baseDashboard.associate,
+                        monthlyGoal: baseDashboard.monthlyGoal,
+                        priorityItems: baseDashboard.priorityItems,
+                        quickActions: baseDashboard.quickActions,
+                        metrics: baseDashboard.metrics,
+                        weeklySales: baseDashboard.weeklySales
+                    )
                     withAnimation {
                         changePasswordMode = false
                     }
@@ -655,6 +681,33 @@ struct LoginView: View {
             employeeID: nonEmpty(metadata?.employeeID) ?? fallback.employeeID,
             shift: nonEmpty(metadata?.shift) ?? fallback.shift
         )
+    }
+
+    private func fetchAssociateProfile(email: String) async -> AssociateProfile? {
+        do {
+            guard let dbUser = try await SupabaseDBService.shared.fetchUserProfile(email: email) else {
+                return nil
+            }
+            let firstName = dbUser.firstName ?? ""
+            let lastName = dbUser.lastName ?? ""
+            let fullName = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = fullName.isEmpty ? (dbUser.email?.components(separatedBy: "@").first?.capitalized ?? "Sales Associate") : fullName
+            let initials = String(name.split(separator: " ").compactMap { $0.first }.map { String($0) }.joined().prefix(2)).uppercased()
+            
+            return AssociateProfile(
+                initials: initials.isEmpty ? "SA" : initials,
+                name: name,
+                role: (dbUser.userRole ?? "associate").capitalized,
+                boutique: "South Mumbai",
+                email: dbUser.email ?? email,
+                phone: dbUser.phoneNumber ?? "",
+                employeeID: dbUser.id,
+                shift: ""
+            )
+        } catch {
+            print("Error fetching associate profile from DB: \(error)")
+            return nil
+        }
     }
 
     private func nonEmpty(_ value: String?) -> String? {
@@ -1146,8 +1199,6 @@ private struct AssociateProfileSheet: View {
                 AssociateProfileInfoRow(title: "Email", value: associate.email, icon: "envelope")
                 AssociateProfileInfoRow(title: "Phone", value: associate.phone, icon: "phone")
                 AssociateProfileInfoRow(title: "Employee ID", value: associate.employeeID, icon: "person.text.rectangle")
-                AssociateProfileInfoRow(title: "Shift", value: associate.shift, icon: "clock")
-                AssociateProfileInfoRow(title: "Permissions", value: "Clienteling, selling, stock visibility, issue intake", icon: "checkmark.shield")
             }
 
             Spacer(minLength: 16)
@@ -1177,7 +1228,7 @@ private struct AssociateProfileSheet: View {
             .buttonStyle(.plain)
         }
         .padding(26)
-        .frame(minWidth: 420, minHeight: 510)
+        .frame(minWidth: 420, minHeight: 420)
         .background(Theme.background)
     }
 }

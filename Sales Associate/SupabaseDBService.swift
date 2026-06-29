@@ -115,4 +115,45 @@ class SupabaseDBService {
             return false
         }
     }
+    
+    /// Fetches the user profile from the database User table by email.
+    func fetchUserProfile(email: String) async throws -> DBUser? {
+        let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let url = URL(string: "\(baseURL)/User?Email=eq.\(cleanEmail)") else {
+            throw URLError(.badURL)
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(anonKey)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        
+        let users = try JSONDecoder().decode([DBUser].self, from: data)
+        return users.first
+    }
 }
+
+struct DBUser: Codable {
+    let id: String
+    let firstName: String?
+    let lastName: String?
+    let email: String?
+    let phoneNumber: String?
+    let userRole: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case firstName = "First Name"
+        case lastName = "Last Name"
+        case email = "Email"
+        case phoneNumber = "Phone Number"
+        case userRole = "User Role"
+    }
+}
+
