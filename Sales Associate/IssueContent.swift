@@ -102,9 +102,9 @@ private struct IssueModePicker: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity, minHeight: 44)
-                        .foregroundStyle(selectedMode == mode ? .white : Theme.muted)
+                        .foregroundStyle(selectedMode == mode ? Theme.gold : Theme.muted)
                         .background(
-                            selectedMode == mode ? AnyShapeStyle(Theme.bestBar) : AnyShapeStyle(.clear),
+                            selectedMode == mode ? AnyShapeStyle(Theme.selected) : AnyShapeStyle(Color.clear),
                             in: Capsule()
                         )
                 }

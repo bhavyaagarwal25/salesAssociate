@@ -1034,9 +1034,9 @@ private struct TopNavigationItem: View {
                 .lineLimit(1)
                 .padding(.horizontal, 16)
                 .frame(height: 44)
-                .foregroundStyle(isSelected ? .white : Theme.muted)
+                .foregroundStyle(isSelected ? Theme.gold : Theme.muted)
                 .background(
-                    isSelected ? AnyShapeStyle(Theme.bestBar) : AnyShapeStyle(.clear),
+                    isSelected ? AnyShapeStyle(Theme.selected) : AnyShapeStyle(Color.clear),
                     in: Capsule()
                 )
         }
@@ -5166,7 +5166,7 @@ private struct BarColumn: View {
                 VStack {
                     Spacer()
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(day.isBest ? Theme.bestBar : Theme.goldGradient)
+                        .fill(day.isBest ? AnyShapeStyle(Theme.goldGradient) : AnyShapeStyle(Theme.goldGradient.opacity(0.40)))
                         .frame(height: max(28, proxy.size.height * day.progress))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -5309,17 +5309,17 @@ private struct SectionHeader: View {
 }
 
 enum Theme {
-    static let ink = Color(red: 0.14, green: 0.12, blue: 0.10)
-    static let muted = Color(red: 0.46, green: 0.42, blue: 0.36)
-    static let gold = Color(red: 0.66, green: 0.47, blue: 0.22)
-    static let line = Color(red: 0.74, green: 0.61, blue: 0.40).opacity(0.28)
-    static let selected = Color(red: 0.95, green: 0.90, blue: 0.82)
+    static let ink = Color(red: 0.15, green: 0.13, blue: 0.11)
+    static let muted = Color(red: 0.54, green: 0.49, blue: 0.44)
+    static let gold = Color(red: 0.70, green: 0.54, blue: 0.33)
+    static let line = Color(red: 0.82, green: 0.78, blue: 0.73).opacity(0.35)
+    static let selected = Color(red: 0.94, green: 0.90, blue: 0.85)
 
     static let background = LinearGradient(
         colors: [
-            Color(red: 0.98, green: 0.96, blue: 0.92),
-            Color(red: 0.95, green: 0.91, blue: 0.85),
-            Color(red: 0.90, green: 0.85, blue: 0.78)
+            Color(red: 0.99, green: 0.98, blue: 0.97),
+            Color(red: 0.97, green: 0.95, blue: 0.92),
+            Color(red: 0.94, green: 0.91, blue: 0.87)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -5327,20 +5327,11 @@ enum Theme {
 
     static let goldGradient = LinearGradient(
         colors: [
-            Color(red: 0.63, green: 0.46, blue: 0.23),
-            Color(red: 0.79, green: 0.62, blue: 0.34)
+            Color(red: 0.68, green: 0.52, blue: 0.31),
+            Color(red: 0.78, green: 0.63, blue: 0.42)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
-    )
-
-    static let bestBar = LinearGradient(
-        colors: [
-            Color(red: 0.16, green: 0.14, blue: 0.12),
-            Color(red: 0.58, green: 0.42, blue: 0.21)
-        ],
-        startPoint: .top,
-        endPoint: .bottom
     )
 }
 
